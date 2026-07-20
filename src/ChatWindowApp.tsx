@@ -7,10 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChatPanel } from "./components/ChatPanel";
-import {
-  GrokLoginForm,
-  type GrokAuthStatus,
-} from "./components/GrokLoginForm";
+import type { GrokAuthStatus } from "./components/GrokLoginForm";
 import {
   MacWindowShell,
   useMacWindowClose,
@@ -26,11 +23,14 @@ import {
   hydrateSchedule,
   loadSchedule,
   looksLikeScheduleRequest,
+  reloadScheduleFromDisk,
   resolveScheduleEventsFromChat,
+  saveSchedule,
   saveScheduleAsync,
   todayKey,
   type ScheduleEvent,
 } from "./lib/schedule";
+// applyScheduleUpserts used for optimistic local mark before disk sync
 import type {
   ChatAttachment,
   ChatMessage,
@@ -189,11 +189,25 @@ export default function ChatWindowApp() {
       incoming: Omit<ScheduleEvent, "id" | "createdAt">[]
     ): Promise<{ added: ScheduleEvent[]; updated: ScheduleEvent[] }> => {
       if (!incoming.length) return { added: [], updated: [] };
-      const prev = loadSchedule();
+      // Prefer disk, but never hang the chat UI if IPC is slow
+      let prev: ScheduleEvent[];
+      try {
+        prev = await reloadScheduleFromDisk();
+      } catch {
+        prev = loadSchedule();
+      }
       const { next, added, updated } = applyScheduleUpserts(prev, incoming);
-      if (!added.length && !updated.length) return { added: [], updated: [] };
-      await saveScheduleAsync(next);
-      await emit("schedule-updated", {}).catch(() => undefined);
+      if (!added.length && !updated.length) {
+        return { added: [], updated: [] };
+      }
+      // Write memory + localStorage immediately so UI sees the mark
+      try {
+        await saveScheduleAsync(next);
+      } catch {
+        // Still keep local write from saveScheduleAsync's first lines
+        saveSchedule(next);
+      }
+      void emit("schedule-updated", {}).catch(() => undefined);
       return { added, updated };
     },
     []
@@ -205,11 +219,20 @@ export default function ChatWindowApp() {
       cancels: Omit<ScheduleEvent, "id" | "createdAt">[]
     ): Promise<ScheduleEvent[]> => {
       if (!cancels.length) return [];
-      const prev = loadSchedule();
+      let prev: ScheduleEvent[];
+      try {
+        prev = await reloadScheduleFromDisk();
+      } catch {
+        prev = loadSchedule();
+      }
       const { remaining, removed } = applyScheduleCancels(prev, cancels);
       if (!removed.length) return [];
-      await saveScheduleAsync(remaining);
-      await emit("schedule-updated", {}).catch(() => undefined);
+      try {
+        await saveScheduleAsync(remaining);
+      } catch {
+        saveSchedule(remaining);
+      }
+      void emit("schedule-updated", {}).catch(() => undefined);
       return removed;
     },
     []
@@ -380,82 +403,60 @@ export default function ChatWindowApp() {
         );
       }
 
-      // Show the reply FIRST — never block typing UI on calendar disk I/O
+      // Parse schedule offline (sync) — never block chat on disk IPC
       let display = rawReply;
+      let newEv: Omit<ScheduleEvent, "id" | "createdAt">[] = [];
+      let cancels: Omit<ScheduleEvent, "id" | "createdAt">[] = [];
       try {
-        const {
-          message: clean,
-          events: extractedEv,
-          cancels,
-        } = extractScheduleFromReply(rawReply);
-        display = clean || rawReply;
-
-        const newEv =
-          !cancels.length && wantSchedule
-            ? resolveScheduleEventsFromChat(text, extractedEv, todayKey())
-            : extractedEv;
-
-        // Fire-and-forget schedule writes so a stuck save can't freeze chat
-        void (async () => {
-          try {
-            const { added, updated } = await upsertScheduleEvents(newEv);
-            const removed = await cancelScheduleEvents(cancels);
-            const extras: string[] = [];
-            if (added.length) extras.push(formatMarkedSummary(added));
-            if (updated.length) extras.push(formatUpdatedSummary(updated));
-            if (newEv.length && !added.length && !updated.length) {
-              extras.push(
-                "ℹ️ That plan is already on the calendar with the same details."
-              );
-            }
-            if (
-              wantSchedule &&
-              !added.length &&
-              !updated.length &&
-              !removed.length &&
-              !cancels.length
-            ) {
-              extras.push(
-                "⚠️ Couldn’t mark that on the calendar. Try: “mark Meeting tomorrow 3pm on calendar”."
-              );
-            }
-            if (removed.length) extras.push(formatCancelledSummary(removed));
-            else if (cancels.length && !removed.length) {
-              extras.push(
-                "⚠️ Couldn’t find a matching event on the calendar to remove — check the date/title."
-              );
-            }
-            if (extras.length) {
-              const note = extras.join("\n\n");
-              setMessages((prev) => {
-                const last = prev[prev.length - 1];
-                if (last?.role === "assistant" && last.content === display) {
-                  return [
-                    ...prev.slice(0, -1),
-                    { ...last, content: `${display}\n\n${note}` },
-                  ];
-                }
-                return prev;
-              });
-            }
-          } catch {
-            /* calendar is secondary to chat */
-          }
-        })();
+        const extracted = extractScheduleFromReply(rawReply);
+        display = extracted.message || rawReply;
+        cancels = extracted.cancels;
+        newEv = !cancels.length
+          ? resolveScheduleEventsFromChat(text, extracted.events, todayKey())
+          : extracted.events;
       } catch {
         display = rawReply;
       }
 
+      // Optimistic local mark (memory + localStorage) so calendar UI can refresh
+      let quickNote = "";
+      try {
+        if (newEv.length) {
+          const prev = loadSchedule();
+          const { next, added, updated } = applyScheduleUpserts(prev, newEv);
+          if (added.length || updated.length) {
+            saveSchedule(next);
+            void emit("schedule-updated", {}).catch(() => undefined);
+            if (added.length) quickNote = formatMarkedSummary(added);
+            else if (updated.length) quickNote = formatUpdatedSummary(updated);
+          } else {
+            quickNote =
+              "ℹ️ That plan is already on the calendar with the same details.";
+          }
+        } else if (wantSchedule) {
+          quickNote =
+            "⚠️ Couldn’t parse a plan from that. Try: “dinner tomorrow 8pm”.";
+        }
+      } catch {
+        /* ignore optimistic mark errors */
+      }
+
+      if (quickNote) display = `${display}\n\n${quickNote}`;
+
+      const assistantId = id();
       setMessages((prev) => [
         ...prev,
         {
-          id: id(),
+          id: assistantId,
           role: "assistant",
           content: display,
           at: Date.now(),
           kind: "text",
         },
       ]);
+      // Stop “typing…” immediately — disk sync continues in background
+      finishLoading();
+
       const expr =
         (typeof res === "object" &&
         res &&
@@ -464,6 +465,38 @@ export default function ChatWindowApp() {
           ? ((res as ChatResponse).expression as PetExpression)
           : "happy") || "happy";
       void notifyPet(expr === "thinking" ? "happy" : expr, "color");
+
+      // Background: ensure disk + cancels (with timeouts inside helpers)
+      void (async () => {
+        try {
+          if (newEv.length) await upsertScheduleEvents(newEv);
+          if (cancels.length) {
+            const removed = await cancelScheduleEvents(cancels);
+            if (removed.length) {
+              const note = formatCancelledSummary(removed);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: `${m.content}\n\n${note}` }
+                    : m
+                )
+              );
+            }
+          }
+        } catch (calErr) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    content: `${m.content}\n\n⚠️ Calendar disk sync: ${errText(calErr)}`,
+                  }
+                : m
+            )
+          );
+        }
+      })();
+      return;
     } catch (e) {
       const msg = errText(e).replace(/^NOT_LOGGED_IN:\s*/i, "");
       if (
@@ -585,23 +618,48 @@ export default function ChatWindowApp() {
     );
   }
 
-  if (needsLogin) {
+  // AI chat is coming soon — no login / no chat for now
+  const AI_CHAT_COMING_SOON = true;
+  if (AI_CHAT_COMING_SOON || needsLogin) {
     return (
       <MacWindowShell
         shownEvent="chat-window-shown"
         forceInteractive
         className="p-[14px] overflow-y-auto overflow-x-hidden"
       >
-        {/* Full upgrade sheet — scroll if needed so nothing is clipped */}
         <div className="w-full min-h-full flex items-start justify-center py-1">
-          <GrokLoginForm
-            onLoggedIn={(s) => {
-              setAuth(s);
-              setError(null);
-              void emit("grok-logged-in", {}).catch(() => undefined);
-            }}
-            onCancel={() => void close()}
-          />
+          <div
+            className="baa-ios-solid text-[#1C1C1E] p-4 space-y-3 w-full max-w-[300px]"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-[16px] font-semibold tracking-[-0.02em] leading-snug">
+                Make Binky your AI assistant
+              </h2>
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
+                Coming soon
+              </span>
+            </div>
+            <p className="text-[12px] text-[#636366] leading-snug">
+              Chat with Binky as your AI assistant is on the way. For now, use
+              the calendar — add plans yourself and AirDrop / sync.
+            </p>
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              className="baa-ios-btn baa-ios-btn-primary w-full py-2.5 text-[13px] opacity-40 cursor-not-allowed pointer-events-none"
+            >
+              Make Binky my AI
+            </button>
+            <button
+              type="button"
+              onClick={() => void close()}
+              className="baa-ios-btn baa-ios-btn-secondary w-full py-2.5 text-[13px]"
+            >
+              Back
+            </button>
+          </div>
         </div>
       </MacWindowShell>
     );

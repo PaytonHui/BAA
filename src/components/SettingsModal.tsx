@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import type { AppConfig } from "../types";
-import { GrokLoginForm, type GrokAuthStatus } from "./GrokLoginForm";
 import { resyncUserBirthdayEvents } from "../lib/defaultCalendar";
 import {
   hydrateSchedule,
@@ -59,39 +57,16 @@ export function SettingsModal({
   onSave: _onSave,
 }: SettingsModalProps) {
   void _onSave;
-  const [auth, setAuth] = useState<GrokAuthStatus | null>(null);
-  const [showLogin, setShowLogin] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [profile, setProfile] = useState<UserProfile>(() => loadUserProfile());
 
   useEffect(() => {
     if (!open) return;
     setMsg(null);
-    setShowLogin(false);
     setProfile(loadUserProfile());
-    void invoke<GrokAuthStatus>("grok_auth_status")
-      .then(setAuth)
-      .catch(() => setAuth({ loggedIn: false, model: "basic" }));
   }, [open, initial]);
 
   if (!open) return null;
-
-  const logout = async () => {
-    setBusy(true);
-    setMsg(null);
-    try {
-      const s = await invoke<GrokAuthStatus>("logout_grok");
-      setAuth(s);
-      setMsg("Signed out — free calendar add is back");
-      // Calendar listens so manual “Add plan” returns
-      void emit("grok-logged-out", {}).catch(() => undefined);
-    } catch (e) {
-      setMsg(typeof e === "string" ? e : "Logout failed");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const persistProfile = (next: UserProfile) => {
     // Clamp day when month changes
@@ -263,56 +238,28 @@ export function SettingsModal({
         </div>
       </div>
 
-      <div className="baa-ios-card px-3.5 py-3 space-y-2.5">
-        <p className="text-[14px] font-semibold tracking-[-0.01em] text-[#1C1C1E]">
-          Make Binky your AI assistant
-        </p>
+      <div className="baa-ios-card px-3.5 py-3 space-y-2.5 opacity-90">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[14px] font-semibold tracking-[-0.01em] text-[#1C1C1E]">
+            Make Binky your AI assistant
+          </p>
+          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
+            Coming soon
+          </span>
+        </div>
         <p className="text-[12px] text-[#8E8E93] leading-snug">
-          Free: calendar & share. With Grok, Binky becomes your AI assistant —
-          chat, answers, and mark plans by talking (basic Grok, not 4.5).
+          Soon: chat with Binky as your AI assistant. For now, use calendar, Add
+          plan, and share.
         </p>
-        {auth?.loggedIn ? (
-          <>
-            <p className="text-[13px] text-[#34C759] font-medium">
-              AI assistant on
-              {auth.displayName ? ` · ${auth.displayName}` : ""}
-              {auth.keyHint ? ` · ${auth.keyHint}` : ""}
-            </p>
-            <p className="text-[11px] text-[#8E8E93] leading-snug">
-              Manual “Add plan” is hidden — tell Binky in chat instead.
-            </p>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void logout()}
-              className="baa-ios-btn baa-ios-btn-secondary w-full text-[13px] py-2.5 disabled:opacity-50"
-            >
-              Turn off AI (free calendar only)
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setShowLogin(true)}
-            className="baa-ios-btn baa-ios-btn-primary w-full text-[13px] py-2.5"
-          >
-            Make Binky my AI assistant
-          </button>
-        )}
+        <button
+          type="button"
+          disabled
+          aria-disabled="true"
+          className="baa-ios-btn baa-ios-btn-primary w-full text-[13px] py-2.5 opacity-40 cursor-not-allowed pointer-events-none"
+        >
+          Make Binky my AI assistant
+        </button>
       </div>
-
-      {showLogin && !auth?.loggedIn && (
-        <GrokLoginForm
-          compact
-          onLoggedIn={(s) => {
-            setAuth(s);
-            setShowLogin(false);
-            setMsg("Upgraded — open Chat and say hi. Calendar manual add is off.");
-            void emit("grok-logged-in", {}).catch(() => undefined);
-          }}
-          onCancel={() => setShowLogin(false)}
-        />
-      )}
 
       {msg && (
         <p className="text-[13px] text-[#007AFF] font-medium px-0.5">{msg}</p>

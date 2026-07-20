@@ -27,10 +27,7 @@ interface CalendarPanelProps {
   onToggleSize?: () => void;
   onRemove: (id: string) => void;
   onClose: () => void;
-  /**
-   * When true (no Grok login), show a form so users can create schedules
-   * without chat. When Grok is signed in, chat marks the calendar instead.
-   */
+  /** Show “+ Add plan” composer for manual schedule create */
   allowManualCreate?: boolean;
   onAdd?: (input: ManualScheduleInput) => void;
 }
@@ -38,8 +35,7 @@ interface CalendarPanelProps {
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
 /**
- * Phoning-style calendar.
- * Free: view + manual add. Grok upgrade: chat marks plans (manual form hidden).
+ * Phoning-style calendar — view day plans + optional manual add.
  */
 export function CalendarPanel({
   open: _open,
@@ -168,13 +164,7 @@ export function CalendarPanel({
             Binky
           </p>
           <p className="text-[10px] text-neutral-400 leading-none truncate">
-            {allowManualCreate
-              ? large
-                ? "calendar · free"
-                : "add plans free"
-              : large
-                ? "calendar · chat marks"
-                : "chat marks plans"}
+            {large ? "calendar · large" : "add plans free"}
           </p>
         </div>
 
@@ -322,7 +312,7 @@ export function CalendarPanel({
         </div>
       </div>
 
-      {/* Day events from chat marks */}
+      {/* Day events list */}
       <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 space-y-2 chat-scroll bg-[#F7F7F8]">
         <p className="text-[10px] font-semibold text-neutral-500 px-0.5">
           {selectedLabel}
@@ -341,9 +331,7 @@ export function CalendarPanel({
                 Binky
               </p>
               <div className="max-w-[95%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-                {allowManualCreate
-                  ? "No plans this day. Add one below — free, no Grok needed."
-                  : "No plans this day. Tell me in chat and I’ll mark it here!"}
+                No plans this day. Tap + Add plan below to create one.
               </div>
             </div>
           </div>

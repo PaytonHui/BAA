@@ -2142,12 +2142,8 @@ export default function App() {
         await closeChat();
         return;
       }
-      if (grokLoggedInRef.current) {
-        await openChat();
-      } else {
-        // Free tier — left-click opens calendar (no Chat in function list either)
-        await openCalendarRef.current?.();
-      }
+      // AI chat is coming soon — left-click always opens calendar
+      await openCalendarRef.current?.();
     }
   };
 

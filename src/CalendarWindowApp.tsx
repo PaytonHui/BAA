@@ -1,7 +1,6 @@
 /**
  * Standalone calendar window (no WebGL pet).
- * Free for everyone — no Grok login required.
- * Manual add when not logged in; chat marks when Grok is on.
+ * View + manual add plans; share via menu AirDrop / sync.
  */
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -11,7 +10,6 @@ import {
   CalendarPanel,
   type ManualScheduleInput,
 } from "./components/CalendarPanel";
-import type { GrokAuthStatus } from "./components/GrokLoginForm";
 import {
   MacWindowShell,
   useMacWindowClose,
@@ -29,16 +27,6 @@ import {
 export default function CalendarWindowApp() {
   const [events, setEvents] = useState<ScheduleEvent[]>(() => loadSchedule());
   const [large, setLarge] = useState(false);
-  const [loggedIn, setLoggedIn] = useState(false);
-
-  const refreshAuth = useCallback(async () => {
-    try {
-      const s = await invoke<GrokAuthStatus>("grok_auth_status");
-      setLoggedIn(!!s.loggedIn);
-    } catch {
-      setLoggedIn(false);
-    }
-  }, []);
 
   const refresh = useCallback(() => {
     void reloadScheduleFromDisk().then(setEvents);
@@ -53,14 +41,12 @@ export default function CalendarWindowApp() {
       .setAlwaysOnTop(true)
       .catch(() => undefined);
     void hydrateSchedule().then(setEvents);
-    void refreshAuth();
-  }, [refreshAuth]);
+  }, []);
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
     void listen("calendar-window-shown", () => {
       refresh();
-      void refreshAuth();
     }).then((u) => unsubs.push(u));
     void listen("calendar-window-data", () => {
       refresh();
@@ -71,14 +57,8 @@ export default function CalendarWindowApp() {
     void listen("schedule-updated", () => {
       refresh();
     }).then((u) => unsubs.push(u));
-    void listen("grok-logged-in", () => {
-      void refreshAuth();
-    }).then((u) => unsubs.push(u));
-    void listen("grok-logged-out", () => {
-      void refreshAuth();
-    }).then((u) => unsubs.push(u));
     return () => unsubs.forEach((u) => u());
-  }, [refresh, refreshAuth]);
+  }, [refresh]);
 
   const close = useMacWindowClose(async () => {
     await emit("calendar-closed", {}).catch(() => undefined);
@@ -114,8 +94,7 @@ export default function CalendarWindowApp() {
     await emit("calendar-toggle-size", { large: next }).catch(() => undefined);
   }, [large]);
 
-  // Free tier: manual create. Grok signed in: chat-only marking.
-  const allowManualCreate = !loggedIn;
+  const allowManualCreate = true;
 
   return (
     <MacWindowShell

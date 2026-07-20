@@ -13,7 +13,7 @@ interface LinkPhonePanelProps {
 }
 
 /**
- * Share calendar — free, no Grok. Sync / AirDrop use disk schedule.
+ * Share calendar — Sync / AirDrop use disk schedule.
  */
 export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
   const [busy, setBusy] = useState(false);
@@ -97,7 +97,7 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
         </button>
       </div>
       <p className="text-[12px] text-[#8E8E93] leading-snug">
-        Free — no Grok login. Add plans in Calendar first, then share.
+        Add plans in Calendar first, then share.
       </p>
       <p className="text-[13px] text-[#8E8E93] leading-snug">
         <span className="font-semibold text-[#1C1C1E]">AirDrop</span> sends{" "}

@@ -43,12 +43,8 @@ export default function MenuWindowApp() {
   const [showChat, setShowChat] = useState(true);
 
   const refreshAuth = useCallback(async () => {
-    try {
-      const s = await invoke<{ loggedIn?: boolean }>("grok_auth_status");
-      setShowChat(!!s.loggedIn);
-    } catch {
-      setShowChat(false);
-    }
+    // AI chat is coming soon — never show Chat in the function list
+    setShowChat(false);
   }, []);
 
   useEffect(() => {

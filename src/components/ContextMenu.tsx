@@ -25,7 +25,7 @@ interface ContextMenuProps {
   onExited?: () => void;
   /** Support section open/closed — parent can resize the floating window */
   onSupportOpenChange?: (open: boolean) => void;
-  /** Free tier (no Grok): hide Chat — calendar is the default entry */
+  /** When false, hide Chat in the function list */
   showChat?: boolean;
 }
 

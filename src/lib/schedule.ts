@@ -125,9 +125,19 @@ export async function saveScheduleAsync(events: ScheduleEvent[]) {
   writeLocalStorage(events);
   if (!isTauri()) return;
   try {
-    await invoke("save_schedule", { events });
+    await Promise.race([
+      invoke("save_schedule", { events }),
+      new Promise<never>((_, rej) =>
+        window.setTimeout(
+          () => rej(new Error("save_schedule timed out")),
+          4000
+        )
+      ),
+    ]);
   } catch (e) {
     console.error("[schedule] disk save failed", e);
+    // Keep memory + localStorage; disk may catch up on next write
+    throw e;
   }
 }
 
@@ -193,7 +203,17 @@ export async function reloadScheduleFromDisk(): Promise<ScheduleEvent[]> {
     return withDefaults(loadSchedule());
   }
   try {
-    const disk = normalizeList(await invoke<unknown>("load_schedule"));
+    const disk = normalizeList(
+      await Promise.race([
+        invoke<unknown>("load_schedule"),
+        new Promise<never>((_, rej) =>
+          window.setTimeout(
+            () => rej(new Error("load_schedule timed out")),
+            3000
+          )
+        ),
+      ])
+    );
     writeLocalStorage(disk);
     return withDefaults(disk);
   } catch {
@@ -516,6 +536,31 @@ export function matchesScheduleCancel(
   return true;
 }
 
+/**
+ * Strict match for ADD/UPDATE (not cancel).
+ * Avoids “Dinner” colliding with junk “Event” rows, or partial title includes.
+ */
+export function matchesScheduleUpsert(
+  existing: ScheduleEvent,
+  incoming: Pick<ScheduleEvent, "date" | "title" | "time">
+): boolean {
+  if (existing.date !== incoming.date) return false;
+  const a = existing.title.toLowerCase().trim();
+  const b = incoming.title.toLowerCase().trim();
+  if (!a || !b) return false;
+  // Exact title (ignore case)
+  if (a === b) {
+    if (incoming.time && existing.time) {
+      return normalizeTime(existing.time) === normalizeTime(incoming.time);
+    }
+    // Same title+date, time missing on one side → treat as same plan to update
+    return true;
+  }
+  // Never treat generic placeholders as a match for a real title
+  if (isGenericScheduleTitle(a) || isGenericScheduleTitle(b)) return false;
+  return false;
+}
+
 function normalizeTime(t: string): string {
   const m = t.trim().match(/(\d{1,2}):(\d{2})/);
   if (!m) return t.trim().toLowerCase();
@@ -560,7 +605,7 @@ export function applyScheduleUpserts(
 
   for (const e of incoming) {
     const idx = next.findIndex((x) =>
-      matchesScheduleCancel(x, {
+      matchesScheduleUpsert(x, {
         date: e.date,
         title: e.title,
         time: e.time,
@@ -917,6 +962,37 @@ export function resolveScheduleEventsFromChat(
   return modelEvents;
 }
 
+/** Activity words that usually mean “put this on the calendar” */
+function hasPlanActivity(text: string): boolean {
+  return /\b(dinner|lunch|breakfast|brunch|meal|supper|coffee|tea|meeting|meet|call|class|exam|flight|train|appointment|appt|date|party|workout|gym|movie|cinema|concert|show|interview|deadline|submit|pickup|dropoff|lesson|tutorial|lecture|doctor|dentist|haircut)\b/i.test(
+    text
+  ) || /(晚飯|晚餐|午餐|午飯|早餐|食飯|約會|會議|開會|上堂|考試|飛機|趕deadline|Deadline)/i.test(
+    text
+  );
+}
+
+function hasWhenHint(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|next)\b/.test(t) ||
+    /\b(聽日|明天|今日|今天|今晚|後日|後天|下星期|下週|星期[一二三四五六日天])\b/.test(
+      text
+    ) ||
+    /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t) ||
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/.test(
+      t
+    ) ||
+    /\b\d{1,2}[:.]\d{2}\b/.test(t) ||
+    /\b\d{1,2}\s*(am|pm)\b/.test(t) ||
+    /\b\d{3,4}\s*(am|pm)\b/.test(t) || // 800pm
+    /\b([01]?\d|2[0-3])[0-5]\d\b/.test(t) || // 2100 military
+    /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(t) ||
+    /\b\d{1,2}-\d{1,2}(?:-\d{2,4})?\b/.test(t) ||
+    /\d{4}-\d{1,2}-\d{1,2}/.test(t) ||
+    /\d{4}\s*年/.test(text)
+  );
+}
+
 /** User is asking to mark / schedule something — or pasted event flyer text */
 export function looksLikeScheduleRequest(text: string): boolean {
   const t = text.toLowerCase().trim();
@@ -924,12 +1000,22 @@ export function looksLikeScheduleRequest(text: string): boolean {
   // Explicit mark / schedule language
   if (
     /\b(mark|schedule|add|put|remember|remind|save|plan|book|set)\b/.test(t) &&
-    (/\b(calendar|schedule|plan|agenda|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(
+    (/\b(calendar|schedule|plan|agenda|tomorrow|today|tmr|tmrw|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(
       t
     ) ||
       /\b(會議|約會|calendar|日曆|記|提醒|聽日|明天|今日)\b/i.test(text) ||
       /\d{4}-\d{1,2}-\d{1,2}/.test(t) ||
       /\d{1,2}\/\d{1,2}/.test(t))
+  ) {
+    return true;
+  }
+  // Casual: “Tmr 8pm dinner at Mongkok” / “23/7 dinner 21:00”
+  if (hasPlanActivity(text) && hasWhenHint(text)) return true;
+  // Time + place-ish (at X / 喺)
+  if (
+    hasWhenHint(text) &&
+    (/\bat\b/i.test(text) || /喺|在/.test(text)) &&
+    text.trim().length >= 8
   ) {
     return true;
   }
@@ -983,29 +1069,53 @@ export function fallbackEventsFromUserRequest(
     (m) =>
       `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`
   );
+  const monthNames: Record<string, number> = {
+    january: 1,
+    february: 2,
+    march: 3,
+    april: 4,
+    may: 5,
+    june: 6,
+    july: 7,
+    august: 8,
+    september: 9,
+    october: 10,
+    november: 11,
+    december: 12,
+    jan: 1,
+    feb: 2,
+    mar: 3,
+    apr: 4,
+    jun: 6,
+    jul: 7,
+    aug: 8,
+    sep: 9,
+    sept: 9,
+    oct: 10,
+    nov: 11,
+    dec: 12,
+  };
+  // "July 23, 2026" or "July 23"
   const enDates = [
     ...userText.matchAll(
-      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/gi
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+(\d{1,2})(?:,?\s*(20\d{2}))?\b/gi
     ),
   ].map((m) => {
-    const months: Record<string, number> = {
-      january: 1,
-      february: 2,
-      march: 3,
-      april: 4,
-      may: 5,
-      june: 6,
-      july: 7,
-      august: 8,
-      september: 9,
-      october: 10,
-      november: 11,
-      december: 12,
-    };
-    const mo = months[m[1].toLowerCase()];
-    return mo
-      ? `${m[3]}-${String(mo).padStart(2, "0")}-${m[2].padStart(2, "0")}`
-      : "";
+    const mo = monthNames[m[1].toLowerCase()];
+    if (!mo) return "";
+    const year = m[3] || today.slice(0, 4);
+    return `${year}-${String(mo).padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  }).filter(Boolean);
+  // "23 July 2026" or "23 July" (common HK English)
+  const enDatesDmy = [
+    ...userText.matchAll(
+      /\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?(?:\s+(20\d{2}))?\b/gi
+    ),
+  ].map((m) => {
+    const mo = monthNames[m[2].toLowerCase()];
+    if (!mo) return "";
+    const year = m[3] || today.slice(0, 4);
+    return `${year}-${String(mo).padStart(2, "0")}-${m[1].padStart(2, "0")}`;
   }).filter(Boolean);
   const isoDates = [
     ...userText.matchAll(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g),
@@ -1014,7 +1124,7 @@ export function fallbackEventsFromUserRequest(
       `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`
   );
 
-  const allDates = [...cnDates, ...enDates, ...isoDates].filter(
+  const allDates = [...cnDates, ...enDates, ...enDatesDmy, ...isoDates].filter(
     (d, i, a) => a.indexOf(d) === i
   );
   if (allDates.length >= 2) {
@@ -1023,17 +1133,42 @@ export function fallbackEventsFromUserRequest(
     endDate = allDates[allDates.length - 1];
   } else if (allDates.length === 1) {
     date = allDates[0];
-  } else if (/\b(today|今日|今天)\b/i.test(userText)) {
+  } else if (/\b(today|tonight|今日|今天|今晚)\b/i.test(userText)) {
     date = today;
-  } else if (/\b(tomorrow|聽日|明天|翌日)\b/i.test(userText)) {
+  } else if (
+    /\b(tomorrow|tmr|tmrw|tmrw\.|tmr\.|聽日|明天|翌日)\b/i.test(userText)
+  ) {
     date = addDaysYmd(today, 1);
   } else if (/\b(day after tomorrow|後日|後天)\b/i.test(userText)) {
     date = addDaysYmd(today, 2);
   } else {
-    const md = userText.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(20\d{2}))?\b/);
+    // D/M or M/D (HK Bunnies usually use day/month, e.g. 23/7)
+    const md = userText.match(/\b(\d{1,2})[\/\-.](\d{1,2})(?:[\/\-.](20\d{2}|\d{2}))?\b/);
     if (md) {
-      const year = md[3] || today.slice(0, 4);
-      date = `${year}-${md[1].padStart(2, "0")}-${md[2].padStart(2, "0")}`;
+      let a = parseInt(md[1], 10);
+      let b = parseInt(md[2], 10);
+      let year = today.slice(0, 4);
+      if (md[3]) {
+        year = md[3].length === 2 ? `20${md[3]}` : md[3];
+      }
+      let month: number;
+      let day: number;
+      if (a > 12 && b >= 1 && b <= 12) {
+        // 23/7 → 23 Jul
+        day = a;
+        month = b;
+      } else if (b > 12 && a >= 1 && a <= 12) {
+        // 7/23 → Jul 23
+        month = a;
+        day = b;
+      } else {
+        // Both ≤12: prefer day/month (HK / most of world outside US)
+        day = a;
+        month = b;
+      }
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      }
     } else {
       const days = [
         "sunday",
@@ -1053,16 +1188,44 @@ export function fallbackEventsFromUserRequest(
     }
   }
 
-  // Time HH:mm or H:mm am/pm
+  // Time: 21:00 | 9:30pm | 800pm | 8pm
   let time: string | undefined;
   const t24 = userText.match(/\b(\d{1,2}):(\d{2})\b/);
+  const t12colon = userText.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)\b/i);
   const t12 = userText.match(/\b(\d{1,2})\s*(am|pm)\b/i);
-  if (t24) {
-    time = `${t24[1].padStart(2, "0")}:${t24[2]}`;
+  const tCompact = userText.match(/\b(\d{3,4})\s*(am|pm)\b/i); // 800pm → 8:00 pm
+  if (t12colon) {
+    let h = parseInt(t12colon[1], 10) % 12;
+    if (t12colon[3].toLowerCase() === "pm") h += 12;
+    time = `${String(h).padStart(2, "0")}:${t12colon[2]}`;
+  } else if (t24) {
+    const h = parseInt(t24[1], 10);
+    const m = parseInt(t24[2], 10);
+    if (h < 24 && m < 60) time = `${String(h).padStart(2, "0")}:${t24[2]}`;
+  } else if (tCompact) {
+    const digits = tCompact[1];
+    let h: number;
+    let m: number;
+    if (digits.length === 3) {
+      h = parseInt(digits[0], 10);
+      m = parseInt(digits.slice(1), 10);
+    } else {
+      h = parseInt(digits.slice(0, 2), 10);
+      m = parseInt(digits.slice(2), 10);
+    }
+    h = h % 12;
+    if (tCompact[2].toLowerCase() === "pm") h += 12;
+    if (m < 60) time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   } else if (t12) {
     let h = parseInt(t12[1], 10) % 12;
     if (t12[2].toLowerCase() === "pm") h += 12;
     time = `${String(h).padStart(2, "0")}:00`;
+  } else {
+    // Military 2100 / 0930 (avoid matching years 2026)
+    const mil = userText.match(/\b([01]?\d|2[0-3])([0-5]\d)\b/);
+    if (mil && !/^20\d{2}$/.test(mil[0])) {
+      time = `${mil[1].padStart(2, "0")}:${mil[2]}`;
+    }
   }
 
   // Prefer a title-looking line (event name), not "Event Date" / 賽事日期 / chat fluff
@@ -1122,23 +1285,44 @@ export function fallbackEventsFromUserRequest(
     }
   }
 
-  if (!title) {
-    title = userText
+  const scrubTitle = (raw: string) =>
+    raw
       .replace(
         /\b(please|pls|can you|could you|mark|schedule|add|put|remember|remind|save|plan|book|set|on|the|my|a|an|to|for|calendar|agenda|event\s*date)\b/gi,
         " "
       )
       .replace(/賽事日期|活動日期/g, " ")
-      .replace(/\b(today|tomorrow|聽日|明天|今日|今天|後日|後天)\b/gi, " ")
+      .replace(
+        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|聽日|明天|今日|今天|今晚|後日|後天)\b/gi,
+        " "
+      )
       .replace(/\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/g, " ")
       .replace(
         /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi,
         " "
       )
       .replace(/\b(20\d{2}-\d{1,2}-\d{1,2})\b/g, " ")
-      .replace(/\b\d{1,2}:\d{2}\b/g, " ")
+      .replace(/\b\d{1,2}[\/\-.]\d{1,2}(?:[\/\-.]\d{2,4})?\b/g, " ")
+      .replace(/\b\d{1,2}:\d{2}\s*(am|pm)?\b/gi, " ")
+      .replace(/\b\d{3,4}\s*(am|pm)\b/gi, " ")
+      .replace(/\b\d{1,2}\s*(am|pm)\b/gi, " ")
+      .replace(/\b([01]?\d|2[0-3])[0-5]\d\b/g, " ")
+      .replace(
+        /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/gi,
+        " "
+      )
+      .replace(/^\d{1,2}\s+/, " ") // leftover day number from "23 July dinner"
       .replace(/\s+/g, " ")
       .trim();
+
+  if (!title) {
+    title = scrubTitle(userText);
+  } else {
+    title = scrubTitle(title) || title;
+  }
+  // Title-case short casual titles
+  if (title && title.length < 48) {
+    title = title.replace(/\b([a-z])/g, (c) => c.toUpperCase());
   }
 
   if (!title || title.length < 2) title = "Event";
