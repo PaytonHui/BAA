@@ -28,6 +28,11 @@ interface MacWindowShellProps {
    */
   shownEvent?: string;
   surfaceClassName?: string;
+  /**
+   * When true (default), the whole panel window receives mouse events.
+   * Chat/login must stay interactive — click-through padding broke the chatbox.
+   */
+  forceInteractive?: boolean;
 }
 
 /**
@@ -39,9 +44,32 @@ export function MacWindowShell({
   className = "",
   shownEvent,
   surfaceClassName = "",
+  forceInteractive = true,
 }: MacWindowShellProps) {
-  // Transparent shadow pad around panels must not steal clicks from other apps
-  usePanelClickThrough();
+  // Panels default to fully interactive so inputs/buttons always work
+  usePanelClickThrough({ forceInteractive });
+
+  // Re-assert hit-testing when the OS window is shown (macOS can leave
+  // ignore-cursor stuck after hide/show cycles).
+  useEffect(() => {
+    if (!shownEvent) return;
+    let unlisten: (() => void) | undefined;
+    void listen(shownEvent, () => {
+      void getCurrentWindow()
+        .setIgnoreCursorEvents(false)
+        .catch(() => undefined);
+      void getCurrentWindow()
+        .setFocus()
+        .catch(() => undefined);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    // Also clear on mount
+    void getCurrentWindow()
+      .setIgnoreCursorEvents(false)
+      .catch(() => undefined);
+    return () => unlisten?.();
+  }, [shownEvent]);
 
   const [phase, setPhase] = useState<Phase>("pre");
   const phaseRef = useRef<Phase>("pre");

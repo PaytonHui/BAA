@@ -289,6 +289,8 @@ export async function showPanelWindow(
     }
     await existing.show();
     try {
+      // Ensure clicks reach the webview after hide/show (macOS)
+      await existing.setIgnoreCursorEvents(false);
       await existing.setAlwaysOnTop(true);
       await existing.setVisibleOnAllWorkspaces(true);
     } catch {
@@ -343,6 +345,7 @@ export async function showPanelWindow(
     await win.setSize(new LogicalSize(w, h));
     await win.setPosition(new LogicalPosition(x, y));
     await win.show();
+    await win.setIgnoreCursorEvents(false);
     await win.setAlwaysOnTop(true);
     await win.setVisibleOnAllWorkspaces(true);
   } catch {

@@ -82,23 +82,39 @@ textarea {
   box-shadow: none;
 }
 
-/* Solid sheet for login (readable over desktop wallpaper) */
+/*
+  Fully opaque sheet for Grok login (standalone window + Chat gate + Settings).
+  Must stay readable over wallpaper / desktop — no glass transparency.
+*/
 .baa-ios-solid {
-  background: #f5f5f7;
-  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  background: #ffffff;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
   border-radius: var(--baa-ios-radius);
-  box-shadow: none;
+  box-shadow:
+    0 8px 28px rgba(0, 0, 0, 0.18),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
   color: var(--baa-ios-label);
 }
 
+.baa-ios-solid.baa-ios-solid-compact {
+  border-radius: var(--baa-ios-radius-card);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.12),
+    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+}
+
 .baa-ios-solid .baa-ios-input {
-  background: #ffffff;
-  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  background: #f2f2f7;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  color: #1c1c1e;
+}
+.baa-ios-solid .baa-ios-input::placeholder {
+  color: #8e8e93;
 }
 .baa-ios-solid .baa-ios-input:focus {
   background: #ffffff;
-  border-color: rgba(0, 122, 255, 0.45);
-  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15);
+  border-color: rgba(0, 122, 255, 0.55);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.18);
 }
 
 /*
@@ -192,62 +208,9 @@ textarea {
     0 14px 32px rgba(0, 0, 0, 0.1) !important;
 }
 
-/*
- * Lightstick shadow — soft wall-cast BEHIND the figure.
- * Simple stick read: soft round head + thin handle (even, natural).
- */
-.baa-lightstick-shadow {
-  position: absolute;
-  left: 50%;
-  top: 47%;
-  z-index: 1; /* under canvas (z-[2]) */
-  width: 34%;
-  height: 56%;
-  transform: translate(-50%, -50%) translate(6px, 7px);
-  pointer-events: none;
-  opacity: 0.72;
-}
-/* Head — centered soft circle (no off-center hotspot) */
-.baa-lightstick-shadow::before {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 8%;
-  width: 58%;
-  aspect-ratio: 1;
-  transform: translateX(-50%);
-  border-radius: 50%;
-  background: radial-gradient(
-    circle at 50% 50%,
-    rgba(0, 0, 0, 0.26) 0%,
-    rgba(0, 0, 0, 0.14) 55%,
-    transparent 78%
-  );
-  filter: blur(9px);
-}
-/* Handle — thin, starts under head so they read as one piece */
-.baa-lightstick-shadow::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 36%;
-  height: 46%;
-  width: 16%;
-  transform: translateX(-50%);
-  border-radius: 999px;
-  background: linear-gradient(
-    180deg,
-    rgba(0, 0, 0, 0.18) 0%,
-    rgba(0, 0, 0, 0.12) 50%,
-    rgba(0, 0, 0, 0.04) 88%,
-    transparent 100%
-  );
-  filter: blur(8px);
-}
-/* Canvas drop-shadow — real model outline (main natural edge) */
+/* Soft edge on the model only (no separate floor oval) */
 .baa-lightstick-stage canvas {
-  filter: drop-shadow(5px 7px 7px rgba(0, 0, 0, 0.22))
-    drop-shadow(2px 3px 3px rgba(0, 0, 0, 0.12));
+  filter: drop-shadow(3px 5px 4px rgba(0, 0, 0, 0.18));
 }
 
 /* —— Insane member-birthday party stage —— */
@@ -311,11 +274,7 @@ textarea {
 .baa-lightstick-stage.baa-party-active canvas {
   filter: drop-shadow(0 0 22px rgba(255, 120, 220, 0.55))
     drop-shadow(0 0 40px rgba(80, 160, 255, 0.45))
-    drop-shadow(6px 8px 8px rgba(0, 0, 0, 0.22))
-    drop-shadow(3px 4px 4px rgba(0, 0, 0, 0.12));
-}
-.baa-lightstick-stage.baa-party-active .baa-lightstick-shadow {
-  opacity: 0.5;
+    drop-shadow(3px 5px 4px rgba(0, 0, 0, 0.18));
 }
 /* Full-stage halo — sized to the party window so it can fully bloom */
 .baa-party-aura {

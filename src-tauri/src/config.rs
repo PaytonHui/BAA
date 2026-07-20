@@ -2,9 +2,18 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// Basic Grok for the lightstick — not flagship Grok 4.5.
-/// Cheap / fast chat model suitable for a desktop pet.
-pub const BASIC_GROK_MODEL: &str = "grok-4-1-fast-non-reasoning";
+/// Basic Grok for the lightstick — fast non-reasoning, not flagship.
+/// Keep in sync with models available on https://api.x.ai/v1/models .
+pub const BASIC_GROK_MODEL: &str = "grok-4.20-0309-non-reasoning";
+
+/// Retired model ids (no longer on api.x.ai) — migrate saved config to BASIC_GROK_MODEL.
+pub const LEGACY_GROK_MODELS: &[&str] = &[
+    "grok-4-1-fast-non-reasoning",
+    "grok-3-mini",
+    "grok-3-mini-fast",
+    "grok-2-1212",
+    "grok-beta",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,7 +23,7 @@ pub struct AppConfig {
     /// Display name from login (optional)
     #[serde(default)]
     pub display_name: Option<String>,
-    /// e.g. grok-4-1-fast-non-reasoning (basic). Prefer BASIC_GROK_MODEL.
+    /// e.g. grok-4.20-0309-non-reasoning (basic). Prefer BASIC_GROK_MODEL.
     pub model: String,
     pub system_prompt: String,
 }
@@ -62,9 +71,11 @@ pub fn load_config() -> Result<AppConfig, String> {
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut cfg: AppConfig = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    if cfg.model.is_empty() || cfg.model.trim() == "grok-4.5" || cfg.model.trim() == "grok-4" {
-        // Migrate away from flagship model — lightstick uses basic Grok
+    let m = cfg.model.trim();
+    if m.is_empty() || LEGACY_GROK_MODELS.iter().any(|legacy| *legacy == m) {
+        // Migrate retired / flagship ids → current basic Grok
         cfg.model = BASIC_GROK_MODEL.into();
+        let _ = save_config(&cfg);
     }
     if cfg.system_prompt.is_empty() {
         cfg.system_prompt = AppConfig::default().system_prompt;

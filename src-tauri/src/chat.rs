@@ -45,28 +45,181 @@ struct XaiRequest {
     max_tokens: u32,
 }
 
-#[derive(Debug, Deserialize)]
-struct XaiChoiceMessage {
-    content: Option<String>,
+/// Pull assistant text from xAI JSON (string content or multimodal array).
+fn extract_assistant_text(body: &str) -> Result<String, String> {
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| format!("Failed to parse response: {e}\n{body}"))?;
+
+    if let Some(err) = v.get("error") {
+        let msg = if err.is_string() {
+            err.as_str().unwrap_or("unknown").to_string()
+        } else {
+            err.get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown")
+                .to_string()
+        };
+        return Err(format!("Grok API error: {msg}"));
+    }
+
+    let content = v
+        .pointer("/choices/0/message/content")
+        .ok_or_else(|| format!("Grok API: empty choices\n{body}"))?;
+
+    let text = match content {
+        Value::String(s) => s.trim().to_string(),
+        Value::Array(parts) => {
+            let mut out = String::new();
+            for p in parts {
+                if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(t);
+                } else if p.get("type").and_then(|t| t.as_str()) == Some("text") {
+                    if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(t);
+                    }
+                }
+            }
+            out.trim().to_string()
+        }
+        other => other
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+    };
+
+    if text.is_empty() {
+        Ok("…I went blank for a second. Try again?".into())
+    } else {
+        Ok(text)
+    }
 }
 
-#[derive(Debug, Deserialize)]
-struct XaiChoice {
-    message: Option<XaiChoiceMessage>,
+/// Prefer current basic chat models; skip image/video/build tools.
+fn rank_chat_models(ids: &[String], preferred: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let push = |list: &mut Vec<String>, id: &str| {
+        if !id.is_empty() && !list.iter().any(|x| x == id) {
+            list.push(id.to_string());
+        }
+    };
+
+    // Hardcoded preferred order (updated when xAI renames models)
+    for id in [
+        preferred,
+        config::BASIC_GROK_MODEL,
+        "grok-4.20-0309-non-reasoning",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.5",
+        "grok-4.20-multi-agent-0309",
+    ] {
+        if ids.is_empty() || ids.iter().any(|x| x == id) {
+            push(&mut out, id);
+        }
+    }
+
+    // Any other grok-* chat model from the live list
+    let mut rest: Vec<String> = ids
+        .iter()
+        .filter(|id| {
+            let l = id.to_lowercase();
+            l.starts_with("grok-")
+                && !l.contains("imagine")
+                && !l.contains("image")
+                && !l.contains("video")
+                && !l.contains("build")
+                && !out.iter().any(|x| x == *id)
+        })
+        .cloned()
+        .collect();
+    // Prefer names with "non-reasoning" / "fast" / "mini"
+    rest.sort_by(|a, b| {
+        let score = |s: &str| {
+            let l = s.to_lowercase();
+            let mut n = 0i32;
+            if l.contains("non-reasoning") {
+                n += 3;
+            }
+            if l.contains("fast") || l.contains("mini") {
+                n += 2;
+            }
+            if l.contains("reasoning") {
+                n -= 1;
+            }
+            n
+        };
+        score(b).cmp(&score(a)).then_with(|| a.cmp(b))
+    });
+    for id in rest {
+        push(&mut out, &id);
+    }
+
+    if out.is_empty() {
+        push(&mut out, config::BASIC_GROK_MODEL);
+        push(&mut out, "grok-4.3");
+        push(&mut out, "grok-4.5");
+    }
+    out
 }
 
-#[derive(Debug, Deserialize)]
-struct XaiResponse {
-    choices: Option<Vec<XaiChoice>>,
-    error: Option<XaiErrorBody>,
-    code: Option<String>,
+async fn list_model_ids(client: &reqwest::Client, api_key: &str) -> Vec<String> {
+    let res = client
+        .get("https://api.x.ai/v1/models")
+        .bearer_auth(api_key)
+        .send()
+        .await;
+    let Ok(res) = res else {
+        return Vec::new();
+    };
+    if !res.status().is_success() {
+        return Vec::new();
+    }
+    let Ok(v) = res.json::<Value>().await else {
+        return Vec::new();
+    };
+    v.get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-#[derive(Debug, Deserialize)]
-struct XaiErrorBody {
-    message: Option<String>,
-    #[serde(default)]
-    code: Option<String>,
+fn chat_debug(msg: &str) {
+    if let Some(base) = dirs::config_dir() {
+        let path = base.join("BAA").join("chat-debug.log");
+        let line = format!(
+            "{} {}\n",
+            chrono_like_now(),
+            msg.replace('\n', " | ")
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(line.as_bytes())
+            });
+    }
+}
+
+fn chrono_like_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("ts={secs}")
 }
 
 /// Parse xAI error JSON which may be:
@@ -252,28 +405,41 @@ pub fn grok_auth_status() -> Result<GrokAuthStatus, String> {
 }
 
 /// Validate key against xAI and save — “Sign in to basic Grok”.
+/// Runs a tiny chat completion so “Signed in” means chat will actually work
+/// (not only that /v1/models accepted the key).
 #[tauri::command]
 pub async fn login_grok(req: GrokLoginRequest) -> Result<GrokAuthStatus, String> {
     let key = req.api_key.trim().to_string();
     if key.is_empty() {
         return Err("Enter your xAI access key to sign in.".into());
     }
-    if !key.starts_with("xai-") && key.len() < 12 {
-        return Err("That doesn’t look like an xAI key (usually starts with xai-). Get one free at https://console.x.ai".into());
+    if !key.starts_with("xai-") {
+        return Err(
+            "Key must start with xai- (from https://console.x.ai → API Keys).\n\
+Don’t paste a password, OpenAI key, or the whole page text."
+                .into(),
+        );
+    }
+    if key.len() < 16 {
+        return Err("That key looks too short. Copy the full key from console.x.ai".into());
     }
 
-    // Lightweight validation — list models
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
 
+    // 1) Auth check
     let res = client
         .get("https://api.x.ai/v1/models")
         .bearer_auth(&key)
         .send()
         .await
-        .map_err(|e| format!("Network error: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "Network error reaching xAI (check Wi‑Fi / VPN / firewall):\n{e}"
+            )
+        })?;
 
     let status = res.status();
     let text = res.text().await.unwrap_or_default();
@@ -281,9 +447,60 @@ pub async fn login_grok(req: GrokLoginRequest) -> Result<GrokAuthStatus, String>
         return Err(parse_api_error(status, &text));
     }
 
+    // 2) Prove chat works — pick any live chat model (auto-adapts when xAI renames)
+    let live = list_model_ids(&client, &key).await;
+    let candidates = rank_chat_models(&live, config::BASIC_GROK_MODEL);
+    let mut chosen = config::BASIC_GROK_MODEL.to_string();
+    let mut last_err = String::new();
+    let mut ok = false;
+    for model in &candidates {
+        let body = json!({
+            "model": model,
+            "messages": [
+                {"role": "user", "content": "Reply with exactly: ok"}
+            ],
+            "max_tokens": 8,
+            "temperature": 0.0,
+        });
+        let res = client
+            .post("https://api.x.ai/v1/chat/completions")
+            .bearer_auth(&key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("Network error during chat test: {e}"))?;
+        let st = res.status();
+        let txt = res.text().await.unwrap_or_default();
+        if st.is_success() {
+            chosen = model.clone();
+            ok = true;
+            break;
+        }
+        last_err = parse_api_error(st, &txt);
+        // Don't try other models if the key itself is invalid / no credits
+        let lower = last_err.to_lowercase();
+        if st.as_u16() == 401
+            || st.as_u16() == 403
+            || lower.contains("credits")
+            || lower.contains("invalid api key")
+            || lower.contains("unauthorized")
+        {
+            return Err(last_err);
+        }
+    }
+    if !ok {
+        return Err(format!(
+            "Key accepted, but chat failed (no usable Grok model).\n\
+Tried: {}\n\
+Buy credits at https://console.x.ai or create a new API key.\n\n{last_err}",
+            candidates.join(", ")
+        ));
+    }
+
     let mut cfg = config::load_config().unwrap_or_else(|_| AppConfig::default());
     cfg.api_key = Some(key);
-    cfg.model = config::BASIC_GROK_MODEL.into();
+    cfg.model = chosen;
     cfg.display_name = req
         .display_name
         .map(|s| s.trim().to_string())
@@ -366,74 +583,147 @@ You can also see images and file text the user attaches — describe or help wit
         cfg.system_prompt, today, today, today
     );
 
+    // Keep the request small so chat stays snappy (long flyer history was huge)
+    let recent: Vec<&ChatMessage> = req
+        .messages
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
     let mut messages: Vec<Value> = vec![json!({
         "role": "system",
         "content": system,
     })];
 
-    for m in &req.messages {
-        if m.role == "user" || m.role == "assistant" {
-            messages.push(json!({
-                "role": m.role,
-                "content": build_message_content(m),
-            }));
-        }
+    for m in recent {
+        messages.push(json!({
+            "role": m.role,
+            "content": build_message_content(m),
+        }));
     }
 
-    // Lightstick always uses basic Grok (not flagship 4.5)
-    let model = {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let preferred = {
         let m = cfg.model.trim();
-        if m.is_empty() || m == "grok-4.5" || m == "grok-4" {
+        if m.is_empty()
+            || config::LEGACY_GROK_MODELS
+                .iter()
+                .any(|legacy| *legacy == m)
+        {
             config::BASIC_GROK_MODEL.to_string()
         } else {
             m.to_string()
         }
     };
 
-    let body = XaiRequest {
-        model,
-        messages,
-        temperature: 0.8,
-        max_tokens: 1024,
-    };
+    // Live model list from xAI → auto-switch when ids are renamed
+    let live = list_model_ids(&client, api_key.trim()).await;
+    let try_models = rank_chat_models(&live, &preferred);
+    chat_debug(&format!(
+        "chat start preferred={preferred} live={} try={:?}",
+        live.len(),
+        try_models
+    ));
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut last_err = String::new();
+    let mut used_model = try_models
+        .first()
+        .cloned()
+        .unwrap_or_else(|| config::BASIC_GROK_MODEL.to_string());
 
-    let res = client
-        .post("https://api.x.ai/v1/chat/completions")
-        .bearer_auth(api_key.trim())
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {e}"))?;
+    for model in &try_models {
+        let body = XaiRequest {
+            model: model.clone(),
+            messages: messages.clone(),
+            temperature: 0.8,
+            max_tokens: 512,
+        };
 
-    let status = res.status();
-    let text = res.text().await.map_err(|e| e.to_string())?;
+        let res = match client
+            .post("https://api.x.ai/v1/chat/completions")
+            .bearer_auth(api_key.trim())
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("Network error: {e}");
+                chat_debug(&format!("model={model} network_err={e}"));
+                continue;
+            }
+        };
 
-    if !status.is_success() {
-        return Err(parse_api_error(status, &text));
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            last_err = parse_api_error(status, &text);
+            chat_debug(&format!(
+                "model={model} http={} err={}",
+                status.as_u16(),
+                last_err.chars().take(160).collect::<String>()
+            ));
+            let lower = last_err.to_lowercase();
+            // Stop immediately on auth / credits — other models won't help
+            if status.as_u16() == 401
+                || status.as_u16() == 403
+                || lower.contains("credits")
+                || lower.contains("invalid api key")
+                || lower.contains("unauthorized")
+            {
+                return Err(last_err);
+            }
+            // Otherwise try next model (retired id, not found, etc.)
+            continue;
+        }
+
+        match extract_assistant_text(&text) {
+            Ok(content) => {
+                used_model = model.clone();
+                if used_model != cfg.model {
+                    let mut next = cfg.clone();
+                    next.model = used_model.clone();
+                    let _ = config::save_config(&next);
+                    chat_debug(&format!("switched model -> {used_model}"));
+                }
+                chat_debug(&format!(
+                    "ok model={used_model} reply_len={}",
+                    content.len()
+                ));
+                let expression = pick_expression(last_user, &content).to_string();
+                return Ok(ChatResponse {
+                    message: content,
+                    expression,
+                });
+            }
+            Err(e) => {
+                last_err = e;
+                chat_debug(&format!("model={model} parse_err={last_err}"));
+                continue;
+            }
+        }
     }
 
-    let parsed: XaiResponse =
-        serde_json::from_str(&text).map_err(|e| format!("Failed to parse response: {e}\n{text}"))?;
-
-    let content = parsed
-        .choices
-        .and_then(|c| c.into_iter().next())
-        .and_then(|c| c.message)
-        .and_then(|m| m.content)
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "…I went blank for a second. Try again?".into());
-
-    let expression = pick_expression(last_user, &content).to_string();
-
-    Ok(ChatResponse {
-        message: content,
-        expression,
+    chat_debug(&format!("all models failed: {last_err}"));
+    Err(if last_err.is_empty() {
+        format!(
+            "Grok chat failed — no usable model.\n\
+Tried: {}\n\
+Buy credits / check key at https://console.x.ai",
+            try_models.join(", ")
+        )
+    } else {
+        last_err
     })
 }

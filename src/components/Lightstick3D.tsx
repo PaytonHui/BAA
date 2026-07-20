@@ -384,8 +384,6 @@ export function Lightstick3D({
           <div className="baa-party-ring delay-c" aria-hidden />
         </>
       )}
-      {/* Soft ground shadow under the stick (3D lift) */}
-      <div className="baa-lightstick-shadow" aria-hidden />
       {/* Star clusters BEHIND the lightstick (z under canvas) — never cover entity */}
       <div
         className="absolute inset-0 z-0 pointer-events-none overflow-visible"

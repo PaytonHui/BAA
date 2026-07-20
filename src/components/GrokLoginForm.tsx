@@ -47,14 +47,16 @@ export function GrokLoginForm({
     }
   };
 
-  // Standalone login window needs a solid sheet; compact (in Settings) can stay lighter
-  const shell = compact ? "baa-ios-card" : "baa-ios-solid";
+  // Always solid/opaque — glass was too transparent over the desktop
+  const shell = compact
+    ? "baa-ios-solid baa-ios-solid-compact"
+    : "baa-ios-solid";
 
   return (
     <div
       className={`${shell} text-[#1C1C1E] ${
         compact
-          ? "p-3 space-y-2.5 w-full"
+          ? "p-3.5 space-y-2.5 w-full"
           : "p-4 space-y-3.5 w-full max-w-[300px]"
       }`}
       onPointerDown={(e) => e.stopPropagation()}
@@ -66,7 +68,11 @@ export function GrokLoginForm({
         <p className="text-[12px] text-[#636366] leading-snug">
           Binky uses{" "}
           <span className="font-semibold text-[#007AFF]">basic Grok</span> (fast
-          chat) — not Grok 4.5. Free credits often available at the xAI console.
+          chat) — not Grok 4.5. Get a key at{" "}
+          <span className="font-medium">console.x.ai → API Keys</span> (must
+          start with <span className="font-mono text-[11px]">xai-</span>). Your
+          team also needs <span className="font-medium">credits</span> on the
+          account or chat will fail.
         </p>
       </div>
 

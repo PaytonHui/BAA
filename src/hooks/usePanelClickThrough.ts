@@ -9,16 +9,24 @@ import { PANEL_SHADOW_PAD } from "../lib/windowLayout";
  * Click-through for floating panel windows.
  * Transparent padding (for drop-shadows) must not block other apps —
  * only the inset panel content captures the mouse.
+ *
+ * IMPORTANT: default to interactive. Starting with ignore=true makes chat/login
+ * unclickable on macOS until the first successful cursor poll (often broken when
+ * the window is newly shown / focused). Chat must always receive clicks.
  */
 export function usePanelClickThrough(opts?: {
   /** Logical px inset matching panel shell padding (default PANEL_SHADOW_PAD) */
   pad?: number;
-  /** Force full-window hits (rare) */
+  /**
+   * Keep the whole window interactive (recommended for chat / login / settings).
+   * Default true — click-through pad is nice-to-have; broken input is not.
+   */
   forceInteractive?: boolean;
 }) {
   const pad = opts?.pad ?? PANEL_SHADOW_PAD;
-  const forceRef = useRef(!!opts?.forceInteractive);
-  forceRef.current = !!opts?.forceInteractive;
+  // Default ON so chatbox/inputs always work
+  const forceRef = useRef(opts?.forceInteractive !== false);
+  forceRef.current = opts?.forceInteractive !== false;
 
   useEffect(() => {
     let cancelled = false;
@@ -36,8 +44,8 @@ export function usePanelClickThrough(opts?: {
       }
     };
 
-    // Default: pass clicks through until cursor is over the real panel
-    void setIgnore(true);
+    // Always start interactive so the first click reaches the chatbox
+    void setIgnore(false);
 
     const tick = async () => {
       if (cancelled) return;
@@ -56,22 +64,24 @@ export function usePanelClickThrough(opts?: {
           const w = size.width / scale;
           const h = size.height / scale;
 
-          // Content rect = window minus transparent shadow padding
+          // Slightly smaller pad than visual shadow so edges stay clickable
+          const hitPad = Math.max(4, pad - 6);
           const over =
-            lx >= pad &&
-            lx <= w - pad &&
-            ly >= pad &&
-            ly <= h - pad;
+            lx >= hitPad &&
+            lx <= w - hitPad &&
+            ly >= hitPad &&
+            ly <= h - hitPad;
 
           await setIgnore(!over);
         }
       } catch {
-        /* ignore frame errors */
+        // On any error, stay interactive rather than locking the panel out
+        await setIgnore(false);
       }
       if (!cancelled) {
         timer = window.setTimeout(() => {
           void tick();
-        }, 20);
+        }, 32);
       }
     };
 

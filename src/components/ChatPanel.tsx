@@ -156,15 +156,14 @@ export function ChatPanel({
     setShowStickers(false);
   };
 
-  const panelW = large ? "w-[360px]" : "w-[280px]";
-  // Height fills the upper band only (parent is already clipped above the pet)
-  const panelH = large
-    ? "h-[min(440px,100%)] max-h-full"
-    : "h-[min(300px,100%)] max-h-full";
+  // Fill the shell (window already sizes the panel) so the composer is never
+  // outside the hit-test region / clipped by fixed widths.
+  const panelW = "w-full max-w-full";
+  const panelH = "h-full max-h-full min-h-0";
 
   return (
     <div
-      className={`panel-surface relative ${panelW} max-w-full ${panelH} flex flex-col rounded-[22px] overflow-hidden shadow-none border border-black/10 bg-[#F7F7F8] ${
+      className={`panel-surface relative ${panelW} ${panelH} flex flex-col rounded-[22px] overflow-hidden shadow-none border border-black/10 bg-[#F7F7F8] ${
         dragging ? "ring-2 ring-[#5B8DEF]/50" : ""
       }`}
       onDragEnter={(e) => {
@@ -208,20 +207,21 @@ export function ChatPanel({
           />
         </div>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-hidden">
           <p className="text-[13px] font-bold text-neutral-900 leading-tight truncate">
             Binky
           </p>
-          <p className="text-[10px] text-neutral-400 leading-none truncate">
-            {loading
-              ? "typing…"
-              : large
-                ? "chat · large"
-                : "photos & files ok"}
+          {/* whitespace-nowrap + no truncate cut so "typing…" is fully visible */}
+          <p
+            className={`text-[10px] leading-snug whitespace-nowrap ${
+              loading ? "text-[#5B8DEF] font-medium" : "text-neutral-400"
+            }`}
+          >
+            {loading ? "typing…" : large ? "large chat" : "online"}
           </p>
         </div>
 
-        {onToggleSize && (
+        {onToggleSize && !loading && (
           <button
             type="button"
             onClick={onToggleSize}

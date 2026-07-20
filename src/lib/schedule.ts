@@ -672,7 +672,7 @@ export function extractScheduleFromReply(raw: string): {
   events: Omit<ScheduleEvent, "id" | "createdAt">[];
   cancels: Omit<ScheduleEvent, "id" | "createdAt">[];
 } {
-  let text = raw;
+  let text = typeof raw === "string" ? raw : String(raw ?? "");
   const events: Omit<ScheduleEvent, "id" | "createdAt">[] = [];
   const cancels: Omit<ScheduleEvent, "id" | "createdAt">[] = [];
 
@@ -687,9 +687,14 @@ export function extractScheduleFromReply(raw: string): {
     const re = /CANCEL_SCHEDULE_JSON\s*:/gi;
     let m: RegExpExecArray | null;
     const ranges: Array<{ start: number; end: number }> = [];
-    while ((m = re.exec(text)) !== null) {
+    let guard = 0;
+    while ((m = re.exec(text)) !== null && guard++ < 20) {
       const json = extractBalancedJsonArray(text, m.index + m[0].length);
-      if (!json) continue;
+      if (!json) {
+        // avoid zero-width / stuck lastIndex edge cases
+        if (re.lastIndex === m.index) re.lastIndex = m.index + 1;
+        continue;
+      }
       const absStart = m.index;
       const absEnd = text.indexOf(json, m.index) + json.length;
       try {
@@ -710,9 +715,13 @@ export function extractScheduleFromReply(raw: string): {
     const re = /SCHEDULE_JSON\s*:/gi;
     let m: RegExpExecArray | null;
     const ranges: Array<{ start: number; end: number }> = [];
-    while ((m = re.exec(text)) !== null) {
+    let guard = 0;
+    while ((m = re.exec(text)) !== null && guard++ < 20) {
       const json = extractBalancedJsonArray(text, m.index + m[0].length);
-      if (!json) continue;
+      if (!json) {
+        if (re.lastIndex === m.index) re.lastIndex = m.index + 1;
+        continue;
+      }
       const absStart = m.index;
       const absEnd = text.indexOf(json, m.index) + json.length;
       try {

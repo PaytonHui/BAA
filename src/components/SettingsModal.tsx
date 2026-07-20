@@ -301,7 +301,8 @@ export function SettingsModal({
           onLoggedIn={(s) => {
             setAuth(s);
             setShowLogin(false);
-            setMsg("Signed in");
+            setMsg("Signed in — open Chat and say hi to Binky");
+            void emit("grok-logged-in", {}).catch(() => undefined);
           }}
           onCancel={() => setShowLogin(false)}
         />

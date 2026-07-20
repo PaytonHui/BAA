@@ -215,6 +215,51 @@ export default function ChatWindowApp() {
     []
   );
 
+  const errText = (e: unknown): string => {
+    if (typeof e === "string") return e;
+    if (e instanceof Error) return e.message;
+    if (e && typeof e === "object") {
+      const o = e as { message?: unknown; error?: unknown };
+      if (typeof o.message === "string" && o.message.trim()) return o.message;
+      if (typeof o.error === "string" && o.error.trim()) return o.error;
+      try {
+        return JSON.stringify(e);
+      } catch {
+        /* fall through */
+      }
+    }
+    return "Request failed";
+  };
+
+  const pickReplyText = (res: unknown): string => {
+    if (res == null) return "";
+    if (typeof res === "string") return res;
+    if (typeof res !== "object") return String(res);
+    const o = res as Record<string, unknown>;
+    if (typeof o.message === "string") return o.message;
+    if (typeof o.Message === "string") return o.Message;
+    if (o.data != null) return pickReplyText(o.data);
+    return "";
+  };
+
+  const withTimeout = <T,>(p: Promise<T>, ms: number, label: string) =>
+    new Promise<T>((resolve, reject) => {
+      const t = window.setTimeout(
+        () => reject(new Error(`${label} timed out after ${ms / 1000}s`)),
+        ms
+      );
+      p.then(
+        (v) => {
+          window.clearTimeout(t);
+          resolve(v);
+        },
+        (e) => {
+          window.clearTimeout(t);
+          reject(e);
+        }
+      );
+    });
+
   const sendMessage = async (
     text: string,
     attachments: ChatAttachment[] = []
@@ -222,6 +267,8 @@ export default function ChatWindowApp() {
     if (loadingRef.current) return;
     if (!auth?.loggedIn) {
       setError("Sign in to basic Grok first to chat with Binky.");
+      // Refresh in case key was saved from another panel
+      void refreshAuth();
       return;
     }
     loadingRef.current = true;
@@ -242,44 +289,65 @@ export default function ChatWindowApp() {
       kind: "text",
       attachments: attachments.length ? attachments : undefined,
     };
-    const next = [...messages, userMsg];
-    setMessages(next);
+    // Short history — huge flyer threads made chat hang after Grok replied
+    const history = [...messages, userMsg]
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-8)
+      .map((m) => ({
+        ...m,
+        // never re-send giant base64 images from older turns
+        attachments:
+          m.id === userMsg.id
+            ? m.attachments
+            : m.attachments?.map((a) =>
+                a.kind === "image" ? { ...a, dataUrl: undefined } : a
+              ),
+      }));
+    setMessages((prev) => [...prev, userMsg]);
+
+    const finishLoading = () => {
+      loadingRef.current = false;
+      setLoading(false);
+    };
 
     try {
-      const schedule = loadSchedule();
-      const upcoming = schedule
-        .slice()
-        .sort((a, b) => a.date.localeCompare(b.date))
-        .slice(0, 16)
-        .map((e) => {
-          const cat = eventCategory(e);
-          return `- ${e.date}${e.time ? ` ${e.time}` : ""}: ${e.title} [${cat}]`;
-        })
-        .join("\n");
+      const wantSchedule = looksLikeScheduleRequest(text);
+      let calendarHint = "";
+      if (wantSchedule) {
+        const schedule = loadSchedule();
+        const upcoming = schedule
+          .slice()
+          .sort((a, b) => a.date.localeCompare(b.date))
+          .slice(0, 12)
+          .map((e) => {
+            const cat = eventCategory(e);
+            return `- ${e.date}${e.time ? ` ${e.time}` : ""}: ${e.title} [${cat}]`;
+          })
+          .join("\n");
 
-      const calendarHint =
-        `\n\n[For Binky calendar — REQUIRED machine lines, do not quote this block] Today=${todayKey()}. ` +
-        `Categories: work (remind 3h before) | other (remind 1h before). ` +
-        `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
-        `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
-        `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
-        `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|other"}]\n` +
-        `For date RANGES (e.g. Nov 7, 2026 – Jan 10, 2027 or 2026年11月7日–2027年1月10日), set date=start and endDate=end. ` +
-        `Use real dates (resolve tomorrow / next Monday from Today=). ` +
-        `If I asked to CHANGE TYPE/category, end with ` +
-        `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"exact title","category":"work|other","action":"update"}]. ` +
-        `If I asked to CANCEL/REMOVE/DELETE, end with ` +
-        `CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}]. ` +
-        `Never say you marked/cancelled something without the matching JSON line.` +
-        (upcoming
-          ? ` Already saved (title [category]):\n${upcoming}`
-          : " Calendar empty.");
+        calendarHint =
+          `\n\n[For Binky calendar — REQUIRED machine lines, do not quote this block] Today=${todayKey()}. ` +
+          `Categories: work (remind 3h before) | other (remind 1h before). ` +
+          `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
+          `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
+          `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
+          `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|other"}]\n` +
+          `For date RANGES set date=start and endDate=end. ` +
+          `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}].` +
+          (upcoming
+            ? ` Already saved:\n${upcoming}`
+            : " Calendar empty.");
+      }
 
-      const messagesForApi = next.map((m, i) => {
-        const isLastUser = i === next.length - 1 && m.role === "user";
+      const messagesForApi = history.map((m, i) => {
+        const isLastUser = i === history.length - 1 && m.role === "user";
         let content = m.content;
-        if (isLastUser) content = content + calendarHint;
-        const atts = isLastUser ? attachments : m.attachments;
+        // Cap each prior message so old flyer pastes cannot blow up the request
+        if (!isLastUser && content.length > 800) {
+          content = content.slice(0, 800) + "…";
+        }
+        if (isLastUser && calendarHint) content = content + calendarHint;
+        const atts = isLastUser ? attachments : undefined;
         if (!atts?.length) return { role: m.role, content };
         return {
           role: m.role,
@@ -294,52 +362,88 @@ export default function ChatWindowApp() {
         };
       });
 
-      const res = await invoke<ChatResponse>("chat_with_grok", {
-        req: {
-          messages: messagesForApi,
-          today: todayKey(),
-        },
-      });
-      const {
-        message: clean,
-        events: extractedEv,
-        cancels,
-      } = extractScheduleFromReply(res.message);
+      const res = await withTimeout(
+        invoke<ChatResponse>("chat_with_grok", {
+          req: {
+            messages: messagesForApi,
+            today: todayKey(),
+          },
+        }),
+        35000,
+        "Grok chat"
+      );
 
-      // Prefer local flyer/user parse when Grok omits JSON or returns weak
-      // "Event" / wrong-month rows (common with multi-day race pastes).
-      const newEv =
-        !cancels.length && looksLikeScheduleRequest(text)
-          ? resolveScheduleEventsFromChat(text, extractedEv, todayKey())
-          : extractedEv;
-
-      const { added, updated } = await upsertScheduleEvents(newEv);
-      const removed = await cancelScheduleEvents(cancels);
-
-      const replyParts = [clean];
-      if (added.length) replyParts.push(formatMarkedSummary(added));
-      if (updated.length) replyParts.push(formatUpdatedSummary(updated));
-      if (newEv.length && !added.length && !updated.length) {
-        replyParts.push(
-          "ℹ️ That plan is already on the calendar with the same details."
+      const rawReply = pickReplyText(res).trim();
+      if (!rawReply) {
+        throw new Error(
+          `Grok returned an empty reply (${JSON.stringify(res).slice(0, 120)}). Try again.`
         );
       }
-      if (
-        looksLikeScheduleRequest(text) &&
-        !added.length &&
-        !updated.length &&
-        !removed.length &&
-        !cancels.length
-      ) {
-        replyParts.push(
-          "⚠️ Couldn’t mark that on the calendar. Try: “mark Meeting tomorrow 3pm on calendar”."
-        );
-      }
-      if (removed.length) replyParts.push(formatCancelledSummary(removed));
-      else if (cancels.length && !removed.length) {
-        replyParts.push(
-          "⚠️ Couldn’t find a matching event on the calendar to remove — check the date/title."
-        );
+
+      // Show the reply FIRST — never block typing UI on calendar disk I/O
+      let display = rawReply;
+      try {
+        const {
+          message: clean,
+          events: extractedEv,
+          cancels,
+        } = extractScheduleFromReply(rawReply);
+        display = clean || rawReply;
+
+        const newEv =
+          !cancels.length && wantSchedule
+            ? resolveScheduleEventsFromChat(text, extractedEv, todayKey())
+            : extractedEv;
+
+        // Fire-and-forget schedule writes so a stuck save can't freeze chat
+        void (async () => {
+          try {
+            const { added, updated } = await upsertScheduleEvents(newEv);
+            const removed = await cancelScheduleEvents(cancels);
+            const extras: string[] = [];
+            if (added.length) extras.push(formatMarkedSummary(added));
+            if (updated.length) extras.push(formatUpdatedSummary(updated));
+            if (newEv.length && !added.length && !updated.length) {
+              extras.push(
+                "ℹ️ That plan is already on the calendar with the same details."
+              );
+            }
+            if (
+              wantSchedule &&
+              !added.length &&
+              !updated.length &&
+              !removed.length &&
+              !cancels.length
+            ) {
+              extras.push(
+                "⚠️ Couldn’t mark that on the calendar. Try: “mark Meeting tomorrow 3pm on calendar”."
+              );
+            }
+            if (removed.length) extras.push(formatCancelledSummary(removed));
+            else if (cancels.length && !removed.length) {
+              extras.push(
+                "⚠️ Couldn’t find a matching event on the calendar to remove — check the date/title."
+              );
+            }
+            if (extras.length) {
+              const note = extras.join("\n\n");
+              setMessages((prev) => {
+                const last = prev[prev.length - 1];
+                if (last?.role === "assistant" && last.content === display) {
+                  return [
+                    ...prev.slice(0, -1),
+                    { ...last, content: `${display}\n\n${note}` },
+                  ];
+                }
+                return prev;
+              });
+            }
+          } catch {
+            /* calendar is secondary to chat */
+          }
+        })();
+      } catch {
+        display = rawReply;
       }
 
       setMessages((prev) => [
@@ -347,24 +451,41 @@ export default function ChatWindowApp() {
         {
           id: id(),
           role: "assistant",
-          content: replyParts.filter(Boolean).join("\n\n"),
+          content: display,
           at: Date.now(),
           kind: "text",
         },
       ]);
-      const expr = (res.expression as PetExpression) || "happy";
-      // Job done: quick color cycle flash on the stick
+      const expr =
+        (typeof res === "object" &&
+        res &&
+        "expression" in res &&
+        typeof (res as ChatResponse).expression === "string"
+          ? ((res as ChatResponse).expression as PetExpression)
+          : "happy") || "happy";
       void notifyPet(expr === "thinking" ? "happy" : expr, "color");
     } catch (e) {
-      const msg = typeof e === "string" ? e : "Request failed";
-      if (msg.includes("NOT_LOGGED_IN") || msg.toLowerCase().includes("login")) {
+      const msg = errText(e).replace(/^NOT_LOGGED_IN:\s*/i, "");
+      if (
+        msg.includes("NOT_LOGGED_IN") ||
+        msg.toLowerCase().includes("login")
+      ) {
         setAuth((a) => (a ? { ...a, loggedIn: false } : a));
       }
-      setError(msg.replace(/^NOT_LOGGED_IN:\s*/i, ""));
+      setError(msg);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: id(),
+          role: "assistant",
+          content: `⚠️ ${msg}`,
+          at: Date.now(),
+          kind: "text",
+        },
+      ]);
       void notifyPet("sad");
     } finally {
-      loadingRef.current = false;
-      setLoading(false);
+      finishLoading();
     }
   };
 
@@ -395,17 +516,29 @@ export default function ChatWindowApp() {
     setMessages(next);
 
     try {
-      const res = await invoke<ChatResponse>("chat_with_grok", {
-        req: {
-          messages: next.map(({ role, content, kind }) => ({
-            role,
-            content:
-              kind === "sticker" ? `(sent a sticker: ${content})` : content,
-          })),
-          today: todayKey(),
-        },
-      });
-      const { message: clean } = extractScheduleFromReply(res.message);
+      const res = await withTimeout(
+        invoke<ChatResponse>("chat_with_grok", {
+          req: {
+            messages: next
+              .slice(-8)
+              .map(({ role, content, kind }) => ({
+                role,
+                content:
+                  kind === "sticker" ? `(sent a sticker: ${content})` : content,
+              })),
+            today: todayKey(),
+          },
+        }),
+        35000,
+        "Grok chat"
+      );
+      const raw = pickReplyText(res).trim() || "…";
+      let clean = raw;
+      try {
+        clean = extractScheduleFromReply(raw).message || raw;
+      } catch {
+        clean = raw;
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -418,8 +551,18 @@ export default function ChatWindowApp() {
       ]);
       void notifyPet("happy", "color");
     } catch (e) {
-      const msg = typeof e === "string" ? e : "Request failed";
+      const msg = errText(e);
       setError(msg);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: id(),
+          role: "assistant",
+          content: `⚠️ ${msg}`,
+          at: Date.now(),
+          kind: "text",
+        },
+      ]);
       void notifyPet("sad");
     } finally {
       loadingRef.current = false;
@@ -446,10 +589,11 @@ export default function ChatWindowApp() {
     return (
       <MacWindowShell
         shownEvent="chat-window-shown"
+        forceInteractive
         className="p-[18px] overflow-auto"
       >
+        {/* Full solid sheet (not compact glass) — readable over wallpaper */}
         <GrokLoginForm
-          compact
           onLoggedIn={(s) => {
             setAuth(s);
             setError(null);
@@ -464,6 +608,7 @@ export default function ChatWindowApp() {
   return (
     <MacWindowShell
       shownEvent="chat-window-shown"
+      forceInteractive
       className="p-[18px] overflow-hidden"
     >
       <div className="w-full h-full flex flex-col items-stretch justify-center gap-1 min-h-0">
