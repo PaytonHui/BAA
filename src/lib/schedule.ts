@@ -8,8 +8,13 @@ export type ScheduleCategory = "work" | "other";
 
 export interface ScheduleEvent {
   id: string;
-  /** YYYY-MM-DD */
+  /** YYYY-MM-DD — start date (or single day) */
   date: string;
+  /**
+   * Optional end date YYYY-MM-DD (inclusive) for multi-day events
+   * e.g. races / seasons spanning weeks.
+   */
+  endDate?: string;
   title: string;
   /** optional "HH:mm" or free text */
   time?: string;
@@ -36,22 +41,33 @@ function normalizeList(raw: unknown): ScheduleEvent[] {
         typeof (e as ScheduleEvent).date === "string" &&
         typeof (e as ScheduleEvent).title === "string"
     )
-    .map((e) => ({
-      id: e.id,
-      date: e.date,
-      title: e.title,
-      time: e.time,
-      note: e.note,
-      category:
-        e.category === "work" || e.category === "other" ? e.category : undefined,
-      createdAt:
-        typeof e.createdAt === "number"
-          ? e.createdAt
-          : typeof (e as unknown as { created_at?: number }).created_at ===
-              "number"
-            ? (e as unknown as { created_at: number }).created_at
-            : Date.now(),
-    }));
+    .map((e) => {
+      const endRaw =
+        typeof (e as ScheduleEvent).endDate === "string"
+          ? (e as ScheduleEvent).endDate
+          : typeof (e as unknown as { end_date?: string }).end_date === "string"
+            ? (e as unknown as { end_date: string }).end_date
+            : undefined;
+      return {
+        id: e.id,
+        date: e.date,
+        endDate: endRaw && /^\d{4}-\d{2}-\d{2}$/.test(endRaw) ? endRaw : undefined,
+        title: e.title,
+        time: e.time,
+        note: e.note,
+        category:
+          e.category === "work" || e.category === "other"
+            ? e.category
+            : undefined,
+        createdAt:
+          typeof e.createdAt === "number"
+            ? e.createdAt
+            : typeof (e as unknown as { created_at?: number }).created_at ===
+                "number"
+              ? (e as unknown as { created_at: number }).created_at
+              : Date.now(),
+      };
+    });
 }
 
 function readLocalStorage(): ScheduleEvent[] {
@@ -92,6 +108,7 @@ export function loadSchedule(): ScheduleEvent[] {
 
 /**
  * Persist schedule to memory + localStorage + disk (survives quit).
+ * Fire-and-forget disk write (ok for UI toggles).
  */
 export function saveSchedule(events: ScheduleEvent[]) {
   memoryCache = events;
@@ -100,6 +117,18 @@ export function saveSchedule(events: ScheduleEvent[]) {
   void invoke("save_schedule", { events }).catch((e) => {
     console.error("[schedule] disk save failed", e);
   });
+}
+
+/** Await disk write — use after chat marks so calendar reload sees data. */
+export async function saveScheduleAsync(events: ScheduleEvent[]) {
+  memoryCache = events;
+  writeLocalStorage(events);
+  if (!isTauri()) return;
+  try {
+    await invoke("save_schedule", { events });
+  } catch (e) {
+    console.error("[schedule] disk save failed", e);
+  }
 }
 
 /**
@@ -176,6 +205,44 @@ export function makeEventId() {
   return `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function normalizeYmd(raw: string): string | null {
+  let date = String(raw ?? "").trim().replace(/\//g, "-");
+  // Chinese: 2026年11月7日
+  const cn = date.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+  if (cn) {
+    return `${cn[1]}-${cn[2].padStart(2, "0")}-${cn[3].padStart(2, "0")}`;
+  }
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(date)) {
+    const [y, m, d] = date.split("-");
+    return `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
+  }
+  // English: November 7, 2026
+  const en = date.match(
+    /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i
+  );
+  if (en) {
+    const months: Record<string, number> = {
+      january: 1,
+      february: 2,
+      march: 3,
+      april: 4,
+      may: 5,
+      june: 6,
+      july: 7,
+      august: 8,
+      september: 9,
+      october: 10,
+      november: 11,
+      december: 12,
+    };
+    const mo = months[en[1].toLowerCase()];
+    if (mo) {
+      return `${en[3]}-${String(mo).padStart(2, "0")}-${en[2].padStart(2, "0")}`;
+    }
+  }
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null;
+}
+
 function parseEventArray(
   arr: unknown
 ): Omit<ScheduleEvent, "id" | "createdAt">[] {
@@ -184,13 +251,13 @@ function parseEventArray(
   for (const item of arr) {
     if (!item || typeof item !== "object") continue;
     const o = item as Record<string, unknown>;
-    let date = String(o.date ?? o.day ?? "").trim();
-    // tolerate 2026/07/18
-    date = date.replace(/\//g, "-");
-    if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(date)) {
-      const [y, m, d] = date.split("-");
-      date = `${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`;
-    }
+    const date =
+      normalizeYmd(String(o.date ?? o.day ?? o.start ?? o.startDate ?? "")) ??
+      "";
+    const endDate =
+      normalizeYmd(
+        String(o.endDate ?? o.end ?? o.until ?? o.end_date ?? "")
+      ) || undefined;
     const title = String(o.title ?? o.name ?? o.event ?? "").trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !title) continue;
     const timeRaw = o.time ?? o.when;
@@ -223,8 +290,11 @@ function parseEventArray(
     } else {
       category = "other";
     }
+    const end =
+      endDate && endDate >= date && endDate !== date ? endDate : undefined;
     events.push({
       date,
+      endDate: end,
       title,
       time: timeRaw ? String(timeRaw).trim() || undefined : undefined,
       note: noteRaw ? String(noteRaw).trim() || undefined : undefined,
@@ -422,11 +492,11 @@ export function getDueReminders(
   return due;
 }
 
-/** Match key for dedupe / cancel (date + title + optional time) */
+/** Match key for dedupe / cancel (date + title + optional time + end) */
 export function scheduleMatchKey(
-  e: Pick<ScheduleEvent, "date" | "title" | "time">
+  e: Pick<ScheduleEvent, "date" | "title" | "time"> & { endDate?: string }
 ): string {
-  return `${e.date}|${e.title.toLowerCase().trim()}|${e.time || ""}`;
+  return `${e.date}|${e.endDate || ""}|${e.title.toLowerCase().trim()}|${e.time || ""}`;
 }
 
 /** Loose match: same date, title contains or equals (ignore case); time optional */
@@ -503,6 +573,8 @@ export function applyScheduleUpserts(
         // Keep title/date unless a richer title was sent
         title: e.title.trim() || prev.title,
         date: e.date || prev.date,
+        endDate:
+          e.endDate !== undefined ? e.endDate || undefined : prev.endDate,
         time: e.time !== undefined ? e.time : prev.time,
         note: e.note !== undefined ? e.note : prev.note,
         // Category always applied when provided (work | other)
@@ -515,6 +587,7 @@ export function applyScheduleUpserts(
         eventCategory(merged) !== eventCategory(prev) ||
         (merged.time || "") !== (prev.time || "") ||
         (merged.note || "") !== (prev.note || "") ||
+        (merged.endDate || "") !== (prev.endDate || "") ||
         merged.title !== prev.title;
       next[idx] = merged;
       if (changed) updated.push(merged);
@@ -537,6 +610,59 @@ export function applyScheduleUpserts(
   return { next, added, updated };
 }
 
+/** Extract a balanced JSON array starting at the first `[` after `from`. */
+function extractBalancedJsonArray(text: string, from = 0): string | null {
+  const start = text.indexOf("[", from);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escape) escape = false;
+      else if (c === "\\") escape = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "[") depth += 1;
+    else if (c === "]") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+function splitScheduleActions(arr: unknown[]): {
+  toAdd: unknown[];
+  toCancel: unknown[];
+} {
+  const toAdd: unknown[] = [];
+  const toCancel: unknown[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const action = String(o.action ?? o.op ?? o.operation ?? o.cmd ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      action === "cancel" ||
+      action === "delete" ||
+      action === "remove" ||
+      action === "unmark" ||
+      o.cancel === true ||
+      o.delete === true
+    ) {
+      toCancel.push(item);
+    } else {
+      toAdd.push(item);
+    }
+  }
+  return { toAdd, toCancel };
+}
+
 /**
  * Pull calendar add/cancel ops from Grok's reply and strip machine lines
  * so the user only sees natural language in chat.
@@ -556,56 +682,54 @@ export function extractScheduleFromReply(raw: string): {
     else events.push(...parsed);
   };
 
-  // 0) CANCEL_SCHEDULE_JSON:[...] — explicit cancels
-  const cancelLabelRe = /CANCEL_SCHEDULE_JSON\s*:\s*(\[[\s\S]*?\])/gi;
-  let m: RegExpExecArray | null;
-  while ((m = cancelLabelRe.exec(text)) !== null) {
-    try {
-      pullArray(JSON.parse(m[1]), true);
-    } catch {
-      /* ignore */
+  // 0) CANCEL_SCHEDULE_JSON: [...]  (balanced brackets — not first `]`)
+  {
+    const re = /CANCEL_SCHEDULE_JSON\s*:/gi;
+    let m: RegExpExecArray | null;
+    const ranges: Array<{ start: number; end: number }> = [];
+    while ((m = re.exec(text)) !== null) {
+      const json = extractBalancedJsonArray(text, m.index + m[0].length);
+      if (!json) continue;
+      const absStart = m.index;
+      const absEnd = text.indexOf(json, m.index) + json.length;
+      try {
+        pullArray(JSON.parse(json), true);
+        ranges.push({ start: absStart, end: absEnd });
+      } catch {
+        /* ignore */
+      }
+    }
+    // strip from end so indices stay valid
+    for (const r of ranges.sort((a, b) => b.start - a.start)) {
+      text = text.slice(0, r.start) + text.slice(r.end);
     }
   }
-  text = text.replace(cancelLabelRe, "");
 
-  // 1) SCHEDULE_JSON:[...] — may include action:"cancel"|"delete"|"remove"
-  const labelRe = /SCHEDULE_JSON\s*:\s*(\[[\s\S]*?\])/gi;
-  while ((m = labelRe.exec(text)) !== null) {
-    try {
-      const arr = JSON.parse(m[1]);
-      if (Array.isArray(arr)) {
-        const toAdd: unknown[] = [];
-        const toCancel: unknown[] = [];
-        for (const item of arr) {
-          if (!item || typeof item !== "object") continue;
-          const o = item as Record<string, unknown>;
-          const action = String(
-            o.action ?? o.op ?? o.operation ?? o.cmd ?? ""
-          )
-            .trim()
-            .toLowerCase();
-          if (
-            action === "cancel" ||
-            action === "delete" ||
-            action === "remove" ||
-            action === "unmark" ||
-            o.cancel === true ||
-            o.delete === true
-          ) {
-            toCancel.push(item);
-          } else {
-            // "update" / "change" / "edit" / default add → upsert list
-            toAdd.push(item);
-          }
-        }
+  // 1) SCHEDULE_JSON: [...]
+  {
+    const re = /SCHEDULE_JSON\s*:/gi;
+    let m: RegExpExecArray | null;
+    const ranges: Array<{ start: number; end: number }> = [];
+    while ((m = re.exec(text)) !== null) {
+      const json = extractBalancedJsonArray(text, m.index + m[0].length);
+      if (!json) continue;
+      const absStart = m.index;
+      const absEnd = text.indexOf(json, m.index) + json.length;
+      try {
+        const arr = JSON.parse(json);
+        if (!Array.isArray(arr)) continue;
+        const { toAdd, toCancel } = splitScheduleActions(arr);
         if (toCancel.length) pullArray(toCancel, true);
         if (toAdd.length) pullArray(toAdd, false);
+        ranges.push({ start: absStart, end: absEnd });
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
+    }
+    for (const r of ranges.sort((a, b) => b.start - a.start)) {
+      text = text.slice(0, r.start) + text.slice(r.end);
     }
   }
-  text = text.replace(labelRe, "");
 
   // 2) ```json ... ``` blocks
   const fenceRe = /```(?:json)?\s*([\s\S]*?)```/gi;
@@ -615,22 +739,7 @@ export function extractScheduleFromReply(raw: string): {
       try {
         const parsed = JSON.parse(b) as unknown[];
         if (!Array.isArray(parsed)) return _all;
-        const toAdd: unknown[] = [];
-        const toCancel: unknown[] = [];
-        for (const item of parsed) {
-          if (!item || typeof item !== "object") continue;
-          const o = item as Record<string, unknown>;
-          const action = String(o.action ?? o.op ?? "").toLowerCase();
-          if (
-            action === "cancel" ||
-            action === "delete" ||
-            action === "remove"
-          ) {
-            toCancel.push(item);
-          } else {
-            toAdd.push(item);
-          }
-        }
+        const { toAdd, toCancel } = splitScheduleActions(parsed);
         const addEv = parseEventArray(toAdd);
         const cancelEv = parseEventArray(toCancel);
         if (addEv.length || cancelEv.length) {
@@ -664,14 +773,15 @@ export function extractScheduleFromReply(raw: string): {
     return _all;
   });
 
-  // 3) Lone JSON array line
+  // 3) Lone JSON array line / block
   const lines = text.split("\n");
   const kept: string[] = [];
   for (const line of lines) {
     const t = line.trim();
-    if (t.startsWith("[") && t.endsWith("]") && t.includes("date")) {
+    if (t.startsWith("[") && t.includes("date")) {
       try {
-        const ev = parseEventArray(JSON.parse(t));
+        const json = extractBalancedJsonArray(t, 0) ?? t;
+        const ev = parseEventArray(JSON.parse(json));
         if (ev.length) {
           events.push(...ev);
           continue;
@@ -705,6 +815,343 @@ export function extractScheduleFromReply(raw: string): {
   };
 }
 
+/** Event flyer / race paste with explicit multi-day dates (CN or EN). */
+export function looksLikeEventFlyer(text: string): boolean {
+  if (/賽事日期|event\s*date|活動日期/i.test(text)) return true;
+  if (
+    /\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(text) &&
+    /(–|-|—|to|至|到)/i.test(text)
+  ) {
+    return true;
+  }
+  if (
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b/i.test(
+      text
+    ) &&
+    /(–|-|—|to)\b/i.test(text)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isGenericScheduleTitle(title: string): boolean {
+  const t = title.trim().toLowerCase();
+  return (
+    !t ||
+    t === "event" ||
+    t === "plan" ||
+    t === "reminder" ||
+    t === "schedule" ||
+    t === "活動" ||
+    t === "事件" ||
+    t === "reminder" ||
+    t === "todo"
+  );
+}
+
+/**
+ * Choose the best events to mark: prefer local flyer/user parse when Grok's
+ * SCHEDULE_JSON is missing, generic ("Event"), or wrong-dated vs explicit flyer dates.
+ */
+export function resolveScheduleEventsFromChat(
+  userText: string,
+  modelEvents: Omit<ScheduleEvent, "id" | "createdAt">[],
+  today: string = todayKey()
+): Omit<ScheduleEvent, "id" | "createdAt">[] {
+  const fromUser = fallbackEventsFromUserRequest(userText, today);
+  if (!fromUser.length) return modelEvents;
+  if (!modelEvents.length) return fromUser;
+
+  const user = fromUser[0];
+  const modelGeneric = modelEvents.every((e) =>
+    isGenericScheduleTitle(e.title)
+  );
+  const userHasRange = !!(user.endDate && user.endDate > user.date);
+  const modelMissingRange =
+    userHasRange &&
+    !modelEvents.some((e) => !!(e.endDate && e.endDate > e.date));
+  const modelMissesFlyerDates =
+    looksLikeEventFlyer(userText) &&
+    !!user.date &&
+    !modelEvents.some(
+      (e) =>
+        e.date === user.date ||
+        (user.endDate && e.endDate === user.endDate) ||
+        (user.endDate &&
+          e.date >= user.date &&
+          e.date <= user.endDate)
+    );
+
+  if (modelGeneric || modelMissingRange || modelMissesFlyerDates) {
+    return fromUser;
+  }
+
+  // Enrich model events that match the flyer start but lost endDate / title
+  if (looksLikeEventFlyer(userText) && (user.endDate || user.title)) {
+    return modelEvents.map((e) => {
+      if (
+        e.date === user.date ||
+        (user.endDate && e.endDate === user.endDate)
+      ) {
+        return {
+          ...e,
+          endDate: e.endDate || user.endDate,
+          title: isGenericScheduleTitle(e.title) ? user.title : e.title,
+          note: e.note || user.note,
+        };
+      }
+      return e;
+    });
+  }
+
+  return modelEvents;
+}
+
+/** User is asking to mark / schedule something — or pasted event flyer text */
+export function looksLikeScheduleRequest(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  if (!t) return false;
+  // Explicit mark / schedule language
+  if (
+    /\b(mark|schedule|add|put|remember|remind|save|plan|book|set)\b/.test(t) &&
+    (/\b(calendar|schedule|plan|agenda|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(
+      t
+    ) ||
+      /\b(會議|約會|calendar|日曆|記|提醒|聽日|明天|今日)\b/i.test(text) ||
+      /\d{4}-\d{1,2}-\d{1,2}/.test(t) ||
+      /\d{1,2}\/\d{1,2}/.test(t))
+  ) {
+    return true;
+  }
+  // Event flyer / race paste (Chinese or English)
+  if (looksLikeEventFlyer(text)) return true;
+  if (
+    /\b(run|race|marathon|virtual|ust|gala|concert|tournament|賽事|馬拉松)\b/i.test(
+      text
+    ) &&
+    (/\d{4}/.test(text) || /年/.test(text))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function addDaysYmd(base: string, days: number): string {
+  const [y, m, d] = base.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return toDateKey(dt.getFullYear(), dt.getMonth(), dt.getDate());
+}
+
+function nextWeekdayYmd(today: string, weekday: number): string {
+  // weekday: 0=Sun … 6=Sat
+  const [y, m, d] = today.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  const cur = dt.getDay();
+  let delta = (weekday - cur + 7) % 7;
+  if (delta === 0) delta = 7; // next week if today is that day
+  return addDaysYmd(today, delta);
+}
+
+/**
+ * When Grok forgets SCHEDULE_JSON but the user clearly asked to mark something
+ * (or pasted an event flyer), invent a best-effort event from the user message.
+ * Supports Chinese dates, English months, and multi-day ranges.
+ */
+export function fallbackEventsFromUserRequest(
+  userText: string,
+  today: string = todayKey()
+): Omit<ScheduleEvent, "id" | "createdAt">[] {
+  if (!looksLikeScheduleRequest(userText)) return [];
+  let date = today;
+  let endDate: string | undefined;
+  const lower = userText.toLowerCase();
+
+  // —— Multi-day / flyer dates (prefer range if present) ——
+  const cnDates = [
+    ...userText.matchAll(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/g),
+  ].map(
+    (m) =>
+      `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`
+  );
+  const enDates = [
+    ...userText.matchAll(
+      /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/gi
+    ),
+  ].map((m) => {
+    const months: Record<string, number> = {
+      january: 1,
+      february: 2,
+      march: 3,
+      april: 4,
+      may: 5,
+      june: 6,
+      july: 7,
+      august: 8,
+      september: 9,
+      october: 10,
+      november: 11,
+      december: 12,
+    };
+    const mo = months[m[1].toLowerCase()];
+    return mo
+      ? `${m[3]}-${String(mo).padStart(2, "0")}-${m[2].padStart(2, "0")}`
+      : "";
+  }).filter(Boolean);
+  const isoDates = [
+    ...userText.matchAll(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/g),
+  ].map(
+    (m) =>
+      `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`
+  );
+
+  const allDates = [...cnDates, ...enDates, ...isoDates].filter(
+    (d, i, a) => a.indexOf(d) === i
+  );
+  if (allDates.length >= 2) {
+    allDates.sort();
+    date = allDates[0];
+    endDate = allDates[allDates.length - 1];
+  } else if (allDates.length === 1) {
+    date = allDates[0];
+  } else if (/\b(today|今日|今天)\b/i.test(userText)) {
+    date = today;
+  } else if (/\b(tomorrow|聽日|明天|翌日)\b/i.test(userText)) {
+    date = addDaysYmd(today, 1);
+  } else if (/\b(day after tomorrow|後日|後天)\b/i.test(userText)) {
+    date = addDaysYmd(today, 2);
+  } else {
+    const md = userText.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(20\d{2}))?\b/);
+    if (md) {
+      const year = md[3] || today.slice(0, 4);
+      date = `${year}-${md[1].padStart(2, "0")}-${md[2].padStart(2, "0")}`;
+    } else {
+      const days = [
+        "sunday",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+      ];
+      for (let i = 0; i < days.length; i++) {
+        if (new RegExp(`\\b${days[i]}\\b`, "i").test(lower)) {
+          date = nextWeekdayYmd(today, i);
+          break;
+        }
+      }
+    }
+  }
+
+  // Time HH:mm or H:mm am/pm
+  let time: string | undefined;
+  const t24 = userText.match(/\b(\d{1,2}):(\d{2})\b/);
+  const t12 = userText.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+  if (t24) {
+    time = `${t24[1].padStart(2, "0")}:${t24[2]}`;
+  } else if (t12) {
+    let h = parseInt(t12[1], 10) % 12;
+    if (t12[2].toLowerCase() === "pm") h += 12;
+    time = `${String(h).padStart(2, "0")}:00`;
+  }
+
+  // Prefer a title-looking line (event name), not "Event Date" / 賽事日期 / chat fluff
+  const lines = userText
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const skipTitleLine = (line: string) => {
+    if (/^(賽事日期|event\s*date|活動日期|date)\s*$/i.test(line)) return true;
+    if (/^\d{4}/.test(line) || /年\s*\d/.test(line)) return true;
+    if (
+      /^(january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(
+        line
+      )
+    ) {
+      return true;
+    }
+    if (/(–|-|—|to|至|到)/.test(line) && /\d{4}/.test(line)) return true;
+    // Chat instructions — not the event name
+    if (
+      /\b(please|pls|can you|could you|mark|schedule|add|put|remember|remind|save|on (the )?calendar|日曆)\b/i.test(
+        line
+      ) &&
+      !/\b(run|race|marathon|concert|gala|show|meeting|flight|exam|class)\b/i.test(
+        line
+      )
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  let title = "";
+  // Prefer lines that look like event names (run/race/etc.) or ALL-CAPS codes
+  for (const line of lines) {
+    if (skipTitleLine(line)) continue;
+    if (
+      /\b(run|race|marathon|virtual|ust|gala|concert|tournament|賽事|馬拉松|show|festival)\b/i.test(
+        line
+      ) ||
+      /[A-Za-z]+[_-]?\d+/i.test(line) ||
+      /_[A-Z0-9]+/i.test(line)
+    ) {
+      if (/[A-Za-z\u4e00-\u9fff]{3,}/.test(line)) {
+        title = line;
+        break;
+      }
+    }
+  }
+  if (!title) {
+    for (const line of lines) {
+      if (skipTitleLine(line)) continue;
+      if (/[A-Za-z\u4e00-\u9fff]{3,}/.test(line)) {
+        title = line;
+        break;
+      }
+    }
+  }
+
+  if (!title) {
+    title = userText
+      .replace(
+        /\b(please|pls|can you|could you|mark|schedule|add|put|remember|remind|save|plan|book|set|on|the|my|a|an|to|for|calendar|agenda|event\s*date)\b/gi,
+        " "
+      )
+      .replace(/賽事日期|活動日期/g, " ")
+      .replace(/\b(today|tomorrow|聽日|明天|今日|今天|後日|後天)\b/gi, " ")
+      .replace(/\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/g, " ")
+      .replace(
+        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi,
+        " "
+      )
+      .replace(/\b(20\d{2}-\d{1,2}-\d{1,2})\b/g, " ")
+      .replace(/\b\d{1,2}:\d{2}\b/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  if (!title || title.length < 2) title = "Event";
+  if (title.length > 72) title = title.slice(0, 72).trim();
+
+  const category = looksLikeWork(title) ? "work" : "other";
+  const note =
+    endDate && endDate !== date
+      ? `Until ${endDate}`
+      : undefined;
+  return [
+    {
+      date,
+      endDate: endDate && endDate > date ? endDate : undefined,
+      title,
+      time,
+      note,
+      category,
+    },
+  ];
+}
+
 /** Friendly line shown in chat after marking */
 export function formatMarkedSummary(
   events: Omit<ScheduleEvent, "id" | "createdAt">[]
@@ -713,13 +1160,23 @@ export function formatMarkedSummary(
   const parts = events.map((e) => {
     try {
       const [y, m, d] = e.date.split("-").map(Number);
-      const label = new Date(y, m - 1, d).toLocaleDateString(undefined, {
+      const startLabel = new Date(y, m - 1, d).toLocaleDateString(undefined, {
         month: "short",
         day: "numeric",
+        year: "numeric",
       });
+      let range = startLabel;
+      if (e.endDate && e.endDate !== e.date) {
+        const [ey, em, ed] = e.endDate.split("-").map(Number);
+        const endLabel = new Date(ey, em - 1, ed).toLocaleDateString(
+          undefined,
+          { month: "short", day: "numeric", year: "numeric" }
+        );
+        range = `${startLabel} – ${endLabel}`;
+      }
       const cat = eventCategory(e as ScheduleEvent);
       const tag = cat === "work" ? "💼 work" : "📅 other";
-      return `${e.time ? e.time + " " : ""}${e.title} (${label} · ${tag})`;
+      return `${e.time ? e.time + " " : ""}${e.title} (${range} · ${tag})`;
     } catch {
       return e.title;
     }
@@ -765,14 +1222,42 @@ export function formatCancelledSummary(events: ScheduleEvent[]): string {
   return `🗑️ Removed from calendar: ${parts.join(" · ")}`;
 }
 
+/** Inclusive range of YYYY-MM-DD keys from start → end (caps long spans). */
+export function eachDateKey(start: string, end?: string): string[] {
+  if (!end || end <= start) return [start];
+  const out: string[] = [];
+  const [ys, ms, ds] = start.split("-").map(Number);
+  const [ye, me, de] = end.split("-").map(Number);
+  const cur = new Date(ys, ms - 1, ds);
+  const last = new Date(ye, me - 1, de);
+  // Safety: max ~400 days so a bad parse can't explode the calendar
+  for (let i = 0; i < 400 && cur <= last; i++) {
+    out.push(
+      toDateKey(cur.getFullYear(), cur.getMonth(), cur.getDate())
+    );
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+}
+
+export function eventTouchesDate(e: ScheduleEvent, date: string): boolean {
+  if (e.date === date) return true;
+  if (e.endDate && e.date <= date && date <= e.endDate) return true;
+  return false;
+}
+
 export function eventsOnDate(events: ScheduleEvent[], date: string) {
   return events
-    .filter((e) => e.date === date)
+    .filter((e) => eventTouchesDate(e, date))
     .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
 }
 
 export function datesWithEvents(events: ScheduleEvent[]): Set<string> {
-  return new Set(events.map((e) => e.date));
+  const set = new Set<string>();
+  for (const e of events) {
+    for (const d of eachDateKey(e.date, e.endDate)) set.add(d);
+  }
+  return set;
 }
 
 export function monthLabel(year: number, month: number) {

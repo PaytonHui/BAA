@@ -327,21 +327,27 @@ pub async fn chat_with_grok(req: ChatRequest) -> Result<ChatResponse, String> {
         .unwrap_or("unknown");
     let system = format!(
         "{}\n\n\
-## Binky calendar (IMPORTANT)\n\
+## Binky calendar (CRITICAL — calendar only updates if you emit machine lines)\n\
 Today is **{}** (user's local date, YYYY-MM-DD).\n\
-You power a desktop pet with a real calendar UI. The app only changes the calendar when you emit machine lines.\n\
+You power a desktop pet with a real calendar UI. Without SCHEDULE_JSON the app will NOT mark anything.\n\
 \n\
-### ADD a plan\n\
-When the user tells you about ANY plan, appointment, meeting, class, exam, deadline, reminder, trip, \
-or asks you to remember / mark / schedule something:\n\
+### ADD a plan (REQUIRED machine line)\n\
+When the user mentions ANY plan, appointment, meeting, class, exam, deadline, reminder, trip, \
+OR asks to remember / mark / schedule / put on the calendar:\n\
 1. Reply naturally in their language (short chat bubble).\n\
-2. End with EXACTLY (no markdown fence):\n\
+2. You MUST end with EXACTLY this format on its own line (NO markdown fence, NO ```json):\n\
 SCHEDULE_JSON:[/* JSON array */]\n\
-Each object: \"date\" (YYYY-MM-DD), \"title\" (short), optional \"time\", \"note\", \"category\" (\"work\"|\"other\").\n\
+Each object: \"date\" (YYYY-MM-DD start), \"title\" (short), optional \"time\" (HH:mm), \"endDate\" (YYYY-MM-DD inclusive end for multi-day), \"note\", \"category\" (\"work\"|\"other\").\n\
 Resolve relative words using today: tomorrow, next Monday, 下星期, 聽日, 明天, etc.\n\
-Example:\n\
+For RANGES (e.g. November 7, 2026 – January 10, 2027 or 2026年11月7日–2027年1月10日) set date=start AND endDate=end.\n\
+If the user pastes an event flyer (Event Date / 賽事日期 / race name), extract title + dates and still emit SCHEDULE_JSON.\n\
+Example single day:\n\
 Got it — I'll mark your meeting.\n\
 SCHEDULE_JSON:[{{\"date\":\"{}\",\"title\":\"Meeting\",\"time\":\"15:00\",\"category\":\"work\"}}]\n\
+Example multi-day:\n\
+Got it — Virtual Run marked.\n\
+SCHEDULE_JSON:[{{\"date\":\"2026-11-07\",\"endDate\":\"2027-01-10\",\"title\":\"Virtual RUN_35A UST Global Run\",\"category\":\"other\"}}]\n\
+If you claim you marked something but omit SCHEDULE_JSON, the calendar stays empty — never do that.\n\
 \n\
 ### CANCEL / remove a plan already on the calendar\n\
 When the user asks to cancel, delete, remove, unmark, or drop a schedule item:\n\

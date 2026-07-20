@@ -10,8 +10,11 @@ use std::path::PathBuf;
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleEventDto {
     pub id: String,
-    /// YYYY-MM-DD
+    /// YYYY-MM-DD start (or single day)
     pub date: String,
+    /// Optional inclusive end YYYY-MM-DD for multi-day events
+    #[serde(default)]
+    pub end_date: Option<String>,
     pub title: String,
     #[serde(default)]
     pub time: Option<String>,

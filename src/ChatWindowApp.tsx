@@ -25,7 +25,9 @@ import {
   formatUpdatedSummary,
   hydrateSchedule,
   loadSchedule,
-  saveSchedule,
+  looksLikeScheduleRequest,
+  resolveScheduleEventsFromChat,
+  saveScheduleAsync,
   todayKey,
   type ScheduleEvent,
 } from "./lib/schedule";
@@ -180,17 +182,18 @@ export default function ChatWindowApp() {
 
   /**
    * Add new plans or update matching ones (e.g. change category work ↔ other).
+   * Awaits disk save so calendar reload sees data immediately.
    */
   const upsertScheduleEvents = useCallback(
-    (
+    async (
       incoming: Omit<ScheduleEvent, "id" | "createdAt">[]
-    ): { added: ScheduleEvent[]; updated: ScheduleEvent[] } => {
+    ): Promise<{ added: ScheduleEvent[]; updated: ScheduleEvent[] }> => {
       if (!incoming.length) return { added: [], updated: [] };
       const prev = loadSchedule();
       const { next, added, updated } = applyScheduleUpserts(prev, incoming);
       if (!added.length && !updated.length) return { added: [], updated: [] };
-      saveSchedule(next);
-      void emit("schedule-updated", {}).catch(() => undefined);
+      await saveScheduleAsync(next);
+      await emit("schedule-updated", {}).catch(() => undefined);
       return { added, updated };
     },
     []
@@ -198,13 +201,15 @@ export default function ChatWindowApp() {
 
   /** Apply cancels from chat; returns events actually removed */
   const cancelScheduleEvents = useCallback(
-    (cancels: Omit<ScheduleEvent, "id" | "createdAt">[]): ScheduleEvent[] => {
+    async (
+      cancels: Omit<ScheduleEvent, "id" | "createdAt">[]
+    ): Promise<ScheduleEvent[]> => {
       if (!cancels.length) return [];
       const prev = loadSchedule();
       const { remaining, removed } = applyScheduleCancels(prev, cancels);
       if (!removed.length) return [];
-      saveSchedule(remaining);
-      void emit("schedule-updated", {}).catch(() => undefined);
+      await saveScheduleAsync(remaining);
+      await emit("schedule-updated", {}).catch(() => undefined);
       return removed;
     },
     []
@@ -253,16 +258,22 @@ export default function ChatWindowApp() {
         .join("\n");
 
       const calendarHint =
-        `\n\n[For Binky calendar — do not quote this block] Today=${todayKey()}. ` +
+        `\n\n[For Binky calendar — REQUIRED machine lines, do not quote this block] Today=${todayKey()}. ` +
         `Categories: work (remind 3h before) | other (remind 1h before). ` +
-        `If I asked to ADD a plan, end with SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"optional","category":"work|other"}]. ` +
-        `If I asked to CHANGE TYPE/category of an existing plan (e.g. other→work, event→work, work→other), end with ` +
-        `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"exact title from list","time":"if known","category":"work|other","action":"update"}] ` +
-        `(match date+title from the saved list; always set the new category). ` +
-        `If I asked to CANCEL/REMOVE/DELETE a plan, end with ` +
-        `CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"optional"}]. ` +
-        `Never claim you changed/cancelled something without the matching JSON.` +
-        (upcoming ? ` Already saved (title [category]):\n${upcoming}` : " Calendar empty.");
+        `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
+        `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
+        `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
+        `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|other"}]\n` +
+        `For date RANGES (e.g. Nov 7, 2026 – Jan 10, 2027 or 2026年11月7日–2027年1月10日), set date=start and endDate=end. ` +
+        `Use real dates (resolve tomorrow / next Monday from Today=). ` +
+        `If I asked to CHANGE TYPE/category, end with ` +
+        `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"exact title","category":"work|other","action":"update"}]. ` +
+        `If I asked to CANCEL/REMOVE/DELETE, end with ` +
+        `CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}]. ` +
+        `Never say you marked/cancelled something without the matching JSON line.` +
+        (upcoming
+          ? ` Already saved (title [category]):\n${upcoming}`
+          : " Calendar empty.");
 
       const messagesForApi = next.map((m, i) => {
         const isLastUser = i === next.length - 1 && m.role === "user";
@@ -291,11 +302,19 @@ export default function ChatWindowApp() {
       });
       const {
         message: clean,
-        events: newEv,
+        events: extractedEv,
         cancels,
       } = extractScheduleFromReply(res.message);
-      const { added, updated } = upsertScheduleEvents(newEv);
-      const removed = cancelScheduleEvents(cancels);
+
+      // Prefer local flyer/user parse when Grok omits JSON or returns weak
+      // "Event" / wrong-month rows (common with multi-day race pastes).
+      const newEv =
+        !cancels.length && looksLikeScheduleRequest(text)
+          ? resolveScheduleEventsFromChat(text, extractedEv, todayKey())
+          : extractedEv;
+
+      const { added, updated } = await upsertScheduleEvents(newEv);
+      const removed = await cancelScheduleEvents(cancels);
 
       const replyParts = [clean];
       if (added.length) replyParts.push(formatMarkedSummary(added));
@@ -303,6 +322,17 @@ export default function ChatWindowApp() {
       if (newEv.length && !added.length && !updated.length) {
         replyParts.push(
           "ℹ️ That plan is already on the calendar with the same details."
+        );
+      }
+      if (
+        looksLikeScheduleRequest(text) &&
+        !added.length &&
+        !updated.length &&
+        !removed.length &&
+        !cancels.length
+      ) {
+        replyParts.push(
+          "⚠️ Couldn’t mark that on the calendar. Try: “mark Meeting tomorrow 3pm on calendar”."
         );
       }
       if (removed.length) replyParts.push(formatCancelledSummary(removed));

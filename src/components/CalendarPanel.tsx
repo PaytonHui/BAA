@@ -285,6 +285,11 @@ export function CalendarPanel({
                           {ev.time}
                         </span>
                       )}
+                      {ev.endDate && ev.endDate !== ev.date && (
+                        <span className="text-[9px] font-semibold text-neutral-600">
+                          {ev.date.slice(5)} → {ev.endDate.slice(5)}
+                        </span>
+                      )}
                       <span
                         className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
                           eventCategory(ev) === "work"
