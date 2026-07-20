@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { calendarDayEmoji } from "../lib/defaultCalendar";
+import { calendarDayMark } from "../lib/defaultCalendar";
 import {
   buildMonthGrid,
   datesWithEvents,
@@ -84,7 +84,7 @@ export function CalendarPanel({
 
   return (
     <div
-      className={`panel-surface relative ${panelW} max-w-full ${panelH} flex flex-col rounded-[22px] overflow-hidden shadow-none border border-black/10 bg-[#F7F7F8]`}
+      className={`panel-surface relative ${panelW} max-w-full ${panelH} flex flex-col rounded-[26px] overflow-hidden shadow-none border-0 bg-[#F7F7F8]`}
     >
       {/* —— Same top bar as chat —— */}
       <header className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-white/90 border-b border-black/[0.06] backdrop-blur-sm">
@@ -184,18 +184,16 @@ export function CalendarPanel({
             const isToday = key === todayKey();
             const isSel = key === selected;
             const has = marked.has(key);
-            // Member heart or user bunny replaces the day number
-            const dayEmoji = calendarDayEmoji(year, month, day);
+            // Member heart / Debut gradient heart / user bunny replace day number
+            const dayMark = calendarDayMark(year, month, day);
             return (
               <button
                 key={key}
                 type="button"
                 onClick={() => setSelected(key)}
                 title={
-                  dayEmoji
-                    ? dayEmoji === "🐰"
-                      ? `${day} · Your birthday`
-                      : `${day} · NewJeans birthday`
+                  dayMark
+                    ? `${day} · ${dayMark.label}`
                     : undefined
                 }
                 className={`relative ${dayH} rounded-md ${dayText} font-semibold transition border flex items-center justify-center ${
@@ -206,21 +204,51 @@ export function CalendarPanel({
                       : "bg-white/70 border-transparent hover:border-neutral-200 text-neutral-700"
                 }`}
               >
-                {dayEmoji ? (
+                {dayMark?.kind === "nj-debut-heart" ? (
+                  <span
+                    className={`baa-nj-debut-heart ${large ? "baa-nj-debut-heart-lg" : ""}`}
+                    aria-label={`Day ${day}, NewJeans Debut Day`}
+                    role="img"
+                  >
+                    {/* 5 NJ lightstick colors as a banded heart */}
+                    <svg viewBox="0 0 16 16" aria-hidden>
+                      <defs>
+                        <linearGradient
+                          id={`nj-debut-g-${key}`}
+                          x1="0%"
+                          y1="0%"
+                          x2="100%"
+                          y2="100%"
+                        >
+                          <stop offset="0%" stopColor="#2060FF" />
+                          <stop offset="22%" stopColor="#2060FF" />
+                          <stop offset="22%" stopColor="#FF6235" />
+                          <stop offset="42%" stopColor="#FF6235" />
+                          <stop offset="42%" stopColor="#FFF874" />
+                          <stop offset="60%" stopColor="#FFF874" />
+                          <stop offset="60%" stopColor="#6BFF60" />
+                          <stop offset="78%" stopColor="#6BFF60" />
+                          <stop offset="78%" stopColor="#F24AFF" />
+                          <stop offset="100%" stopColor="#F24AFF" />
+                        </linearGradient>
+                      </defs>
+                      <path
+                        fill={`url(#nj-debut-g-${key})`}
+                        d="M8 14.2S1.6 10.1 1.6 5.9C1.6 3.6 3.3 2 5.4 2c1.2 0 2.3.6 2.6 1.5C8.3 2.6 9.4 2 10.6 2c2.1 0 3.8 1.6 3.8 3.9 0 4.2-6.4 8.3-6.4 8.3z"
+                      />
+                    </svg>
+                  </span>
+                ) : dayMark?.kind === "emoji" ? (
                   <span
                     className={`leading-none ${large ? "text-[15px]" : "text-[12px]"}`}
-                    aria-label={
-                      dayEmoji === "🐰"
-                        ? `Day ${day}, your birthday`
-                        : `Day ${day}, NewJeans birthday`
-                    }
+                    aria-label={`Day ${day}, ${dayMark.label}`}
                   >
-                    {dayEmoji}
+                    {dayMark.value}
                   </span>
                 ) : (
                   day
                 )}
-                {has && !dayEmoji && (
+                {has && !dayMark && (
                   <span
                     className={`absolute bottom-px left-1/2 -translate-x-1/2 w-1 h-1 rounded-full ${
                       isSel ? "bg-neutral-800" : "bg-[#5B8DEF]"

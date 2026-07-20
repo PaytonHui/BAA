@@ -163,8 +163,8 @@ export function ChatPanel({
 
   return (
     <div
-      className={`panel-surface relative ${panelW} ${panelH} flex flex-col rounded-[22px] overflow-hidden shadow-none border border-black/10 bg-[#F7F7F8] ${
-        dragging ? "ring-2 ring-[#5B8DEF]/50" : ""
+      className={`panel-surface relative ${panelW} ${panelH} flex flex-col rounded-[26px] overflow-hidden shadow-none border-0 bg-[#F7F7F8] ${
+        dragging ? "ring-2 ring-[#5B8DEF]/35" : ""
       }`}
       onDragEnter={(e) => {
         e.preventDefault();

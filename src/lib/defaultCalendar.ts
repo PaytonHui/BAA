@@ -503,9 +503,47 @@ export function resyncUserBirthdayEvents(
   return mergeDefaultCalendarEvents(without, now).events;
 }
 
+/** NewJeans debut anniversary — every 22 July */
+export function isNewJeansDebutDay(monthIndex: number, day: number): boolean {
+  return monthIndex + 1 === 7 && day === 22;
+}
+
 /**
- * Calendar grid glyph for a day:
- * NewJeans member heart wins; else user bunny.
+ * Calendar grid mark for a day.
+ * - Member birthday → single color heart emoji
+ * - Debut Day (7/22) → five-color NJ gradient heart (rendered in CSS)
+ * - User birthday → bunny
+ */
+export type CalendarDayMark =
+  | { kind: "emoji"; value: string; label: string }
+  | { kind: "nj-debut-heart"; label: string };
+
+export function calendarDayMark(
+  year: number,
+  monthIndex: number,
+  day: number,
+  profile?: UserProfile
+): CalendarDayMark | null {
+  const heart = newJeansBirthdayHeart(year, monthIndex, day);
+  if (heart) {
+    return { kind: "emoji", value: heart, label: "NewJeans birthday" };
+  }
+  if (isNewJeansDebutDay(monthIndex, day)) {
+    return {
+      kind: "nj-debut-heart",
+      label: "NewJeans Debut Day",
+    };
+  }
+  const p = profile ?? loadUserProfile();
+  if (p.birthdayMonth == null || p.birthdayDay == null) return null;
+  if (monthIndex + 1 !== p.birthdayMonth || day !== p.birthdayDay) return null;
+  return { kind: "emoji", value: USER_BUNNY, label: "Your birthday" };
+}
+
+/**
+ * Calendar grid glyph for a day (emoji only).
+ * Debut Day is handled as a CSS heart via `calendarDayMark` (not a single emoji).
+ * Fallback star if a plain string is needed: ⭐
  */
 export function calendarDayEmoji(
   year: number,
@@ -513,10 +551,9 @@ export function calendarDayEmoji(
   day: number,
   profile?: UserProfile
 ): string | null {
-  const heart = newJeansBirthdayHeart(year, monthIndex, day);
-  if (heart) return heart;
-  const p = profile ?? loadUserProfile();
-  if (p.birthdayMonth == null || p.birthdayDay == null) return null;
-  if (monthIndex + 1 !== p.birthdayMonth || day !== p.birthdayDay) return null;
-  return USER_BUNNY;
+  const mark = calendarDayMark(year, monthIndex, day, profile);
+  if (!mark) return null;
+  if (mark.kind === "emoji") return mark.value;
+  // Debut Day — star fallback for callers that only accept plain text
+  return "⭐";
 }

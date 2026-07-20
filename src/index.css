@@ -67,7 +67,7 @@ textarea {
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: var(--baa-ios-blur);
   -webkit-backdrop-filter: var(--baa-ios-blur);
-  border: 0.5px solid rgba(255, 255, 255, 0.65);
+  border: none;
   border-radius: var(--baa-ios-radius);
   box-shadow: none;
   color: var(--baa-ios-label);
@@ -88,19 +88,15 @@ textarea {
 */
 .baa-ios-solid {
   background: #ffffff;
-  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border: none;
   border-radius: var(--baa-ios-radius);
-  box-shadow:
-    0 8px 28px rgba(0, 0, 0, 0.18),
-    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   color: var(--baa-ios-label);
 }
 
 .baa-ios-solid.baa-ios-solid-compact {
   border-radius: var(--baa-ios-radius-card);
-  box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.12),
-    0 1px 0 rgba(255, 255, 255, 0.9) inset;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.1);
 }
 
 .baa-ios-solid .baa-ios-input {
@@ -194,23 +190,48 @@ textarea {
   will-change: auto;
 }
 
-/* Floating panels — rounded + soft 3D drop shadow (all windows) */
+/*
+  Floating panels — simple basic drop shadow (no multi-layer / hard border).
+  Lightstick entity shadow is separate and unchanged.
+*/
 .mac-window-surface .baa-ios-glass,
 .mac-window-surface .baa-ios-solid,
 .mac-window-surface .panel-surface,
 .mac-window-surface .baa-ios-menu-sheet,
 .baa-ios-solid.baa-ios-menu-sheet {
-  border-radius: 28px !important;
-  box-shadow:
-    0 1px 1px rgba(0, 0, 0, 0.05),
-    0 3px 8px rgba(0, 0, 0, 0.08),
-    0 8px 20px rgba(0, 0, 0, 0.14),
-    0 14px 32px rgba(0, 0, 0, 0.1) !important;
+  border-radius: 24px !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12) !important;
 }
 
-/* Soft edge on the model only (no separate floor oval) */
+/* Soft edge on the model only — keep as-is */
 .baa-lightstick-stage canvas {
   filter: drop-shadow(3px 5px 4px rgba(0, 0, 0, 0.18));
+}
+
+/*
+  NewJeans Debut Day (22 Jul) — 5-member color heart (SVG) on the calendar.
+  Minji blue · Hanni orange · Danielle yellow · Haerin green · Hyein purple
+*/
+.baa-nj-debut-heart {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  line-height: 0;
+  filter: drop-shadow(0 0.5px 0.6px rgba(0, 0, 0, 0.18));
+}
+.baa-nj-debut-heart svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.baa-nj-debut-heart-lg {
+  width: 17px;
+  height: 17px;
 }
 
 /* —— Insane member-birthday party stage —— */
