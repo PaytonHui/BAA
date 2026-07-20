@@ -1,0 +1,40 @@
+[package]
+name = "baa"
+version = "0.1.0"
+description = "BAA — NewJeans lightstick desktop companion"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "baa_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+dirs = "6"
+thiserror = "2"
+dotenvy = "0.15"
+objc2 = "0.6"
+block2 = "0.6"
+axum = { version = "0.8.9", features = ["ws"] }
+tower-http = { version = "0.7.0", features = ["cors"] }
+futures-util = "0.3.32"
+local-ip-address = "0.6.13"
+rand = "0.10.2"
+qrcode = { version = "0.14.1", features = ["svg"] }
+once_cell = "1.21.4"
+
+# custom-protocol = embed frontend in the binary (standalone .app works offline)
+# Without this, BAA always runs in "dev" mode and loads http://localhost:1420
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+

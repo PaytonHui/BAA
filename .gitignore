@@ -1,0 +1,57 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# ── Secrets & credentials (NEVER commit) ─────────────────────────
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+*.pem
+*.p12
+*.pfx
+*.key
+!*.key.ts
+!*.key.tsx
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.secret
+*.secrets
+secrets/
+credentials/
+**/credentials.json
+**/service-account*.json
+**/*secret*
+**/*password*
+# Local app config that may hold API keys (if ever copied into the tree)
+**/config.local.json
+**/config.secret.json
+.npmrc
+.yarnrc
+# Optional: local override with keys
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS / IDE
+.DS_Store
+*.log
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*~
+
+# Tauri / packing artifacts
+src-tauri/gen/schemas/acl-manifests.json
+src-tauri/gen/schemas/desktop-schema.json
+*.dmg
+*.app
+!public/**
