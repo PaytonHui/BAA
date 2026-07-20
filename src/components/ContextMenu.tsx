@@ -25,6 +25,8 @@ interface ContextMenuProps {
   onExited?: () => void;
   /** Support section open/closed — parent can resize the floating window */
   onSupportOpenChange?: (open: boolean) => void;
+  /** Free tier (no Grok): hide Chat — calendar is the default entry */
+  showChat?: boolean;
 }
 
 /**
@@ -48,6 +50,7 @@ export function ContextMenu({
   onQuit,
   onExited,
   onSupportOpenChange,
+  showChat = true,
 }: ContextMenuProps) {
   const [supportOpen, setSupportOpen] = useState(false);
   const [supportMsg, setSupportMsg] = useState<string | null>(null);
@@ -71,7 +74,7 @@ export function ContextMenu({
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      <MenuItem label="Chat" onClick={onChat} />
+      {showChat && <MenuItem label="Chat" onClick={onChat} />}
       <MenuItem label="Calendar" onClick={onCalendar} />
       <MenuItem label="Light color" onClick={onLightColor} />
       <MuteSlideRow muted={muted} onToggle={onToggleMute} />

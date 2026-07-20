@@ -590,17 +590,19 @@ export default function ChatWindowApp() {
       <MacWindowShell
         shownEvent="chat-window-shown"
         forceInteractive
-        className="p-[18px] overflow-auto"
+        className="p-[14px] overflow-y-auto overflow-x-hidden"
       >
-        {/* Full solid sheet (not compact glass) — readable over wallpaper */}
-        <GrokLoginForm
-          onLoggedIn={(s) => {
-            setAuth(s);
-            setError(null);
-            void emit("grok-logged-in", {}).catch(() => undefined);
-          }}
-          onCancel={() => void close()}
-        />
+        {/* Full upgrade sheet — scroll if needed so nothing is clipped */}
+        <div className="w-full min-h-full flex items-start justify-center py-1">
+          <GrokLoginForm
+            onLoggedIn={(s) => {
+              setAuth(s);
+              setError(null);
+              void emit("grok-logged-in", {}).catch(() => undefined);
+            }}
+            onCancel={() => void close()}
+          />
+        </div>
       </MacWindowShell>
     );
   }

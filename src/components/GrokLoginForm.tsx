@@ -56,40 +56,49 @@ export function GrokLoginForm({
     <div
       className={`${shell} text-[#1C1C1E] ${
         compact
-          ? "p-3.5 space-y-2.5 w-full"
-          : "p-4 space-y-3.5 w-full max-w-[300px]"
+          ? "p-3 space-y-2 w-full"
+          : "p-3.5 space-y-2.5 w-full max-w-[300px]"
       }`}
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className="space-y-1">
-        <h2 className="text-[17px] font-semibold tracking-[-0.02em] text-[#1C1C1E]">
-          Sign in to Grok
+        <h2
+          className={`font-semibold tracking-[-0.02em] text-[#1C1C1E] leading-snug ${
+            compact ? "text-[15px]" : "text-[16px]"
+          }`}
+        >
+          Make Binky your AI assistant
         </h2>
-        <p className="text-[12px] text-[#636366] leading-snug">
-          Binky uses{" "}
-          <span className="font-semibold text-[#007AFF]">basic Grok</span> (fast
-          chat) — not Grok 4.5. Get a key at{" "}
-          <span className="font-medium">console.x.ai → API Keys</span> (must
-          start with <span className="font-mono text-[11px]">xai-</span>). Your
-          team also needs <span className="font-medium">credits</span> on the
-          account or chat will fail.
+        <p className="text-[11px] text-[#636366] leading-snug">
+          Powered by{" "}
+          <span className="font-semibold text-[#007AFF]">Grok</span> (basic —
+          not 4.5). Chat with Binky, get answers, and mark your calendar by
+          talking.
+        </p>
+        <p className="text-[10px] text-[#8E8E93] leading-snug">
+          Calendar stays free without login. Key from{" "}
+          <span className="font-medium text-[#636366]">
+            console.x.ai → API Keys
+          </span>{" "}
+          (<span className="font-mono text-[10px]">xai-</span>
+          …). Needs credits.
         </p>
       </div>
 
-      <label className="block space-y-1.5">
-        <span className="text-[11px] font-medium text-[#636366]">
+      <label className="block space-y-1">
+        <span className="text-[10px] font-medium text-[#636366]">
           Your name (optional)
         </span>
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Bunny"
-          className="baa-ios-input w-full h-11 px-3.5 text-[14px] text-[#1C1C1E]"
+          className="baa-ios-input w-full h-9 px-3 text-[13px] text-[#1C1C1E]"
         />
       </label>
 
-      <label className="block space-y-1.5">
-        <span className="text-[11px] font-medium text-[#636366]">
+      <label className="block space-y-1">
+        <span className="text-[10px] font-medium text-[#636366]">
           xAI access key
         </span>
         <input
@@ -98,7 +107,7 @@ export function GrokLoginForm({
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="xai-…"
           autoComplete="off"
-          className="baa-ios-input w-full h-11 px-3.5 text-[14px] text-[#1C1C1E]"
+          className="baa-ios-input w-full h-9 px-3 text-[13px] text-[#1C1C1E]"
           onKeyDown={(e) => {
             if (e.key === "Enter") void login();
           }}
@@ -107,18 +116,18 @@ export function GrokLoginForm({
 
       <button
         type="button"
-        className="baa-ios-btn w-full text-[13px] text-[#007AFF] font-medium text-left hover:underline"
+        className="baa-ios-btn w-full text-[12px] text-[#007AFF] font-medium text-left hover:underline py-0.5"
         onClick={() => {
           void openUrl("https://console.x.ai").catch(() => {
             window.open("https://console.x.ai", "_blank");
           });
         }}
       >
-        Get a free key at console.x.ai →
+        Get a key at console.x.ai →
       </button>
 
       {error && (
-        <p className="text-[12px] text-[#FF3B30] leading-snug whitespace-pre-wrap">
+        <p className="text-[11px] text-[#FF3B30] leading-snug whitespace-pre-wrap max-h-16 overflow-y-auto">
           {error}
         </p>
       )}
@@ -128,18 +137,18 @@ export function GrokLoginForm({
           <button
             type="button"
             onClick={onCancel}
-            className="baa-ios-btn baa-ios-btn-secondary flex-1 px-2 py-2.5 text-[14px]"
+            className="baa-ios-btn baa-ios-btn-secondary flex-1 px-2 py-2 text-[13px]"
           >
-            Cancel
+            Not now
           </button>
         )}
         <button
           type="button"
           disabled={busy || !apiKey.trim()}
           onClick={() => void login()}
-          className="baa-ios-btn baa-ios-btn-primary flex-1 px-2 py-2.5 text-[14px] disabled:opacity-40"
+          className="baa-ios-btn baa-ios-btn-primary flex-1 px-2 py-2 text-[13px] disabled:opacity-40"
         >
-          {busy ? "Signing in…" : "Sign in"}
+          {busy ? "Connecting…" : "Make Binky my AI"}
         </button>
       </div>
     </div>

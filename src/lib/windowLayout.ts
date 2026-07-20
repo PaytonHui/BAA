@@ -39,9 +39,9 @@ export const SETTINGS_H = 720;
 export const LINK_W = 320;
 export const LINK_H = 720;
 
-/** Grok login floating window */
-export const LOGIN_W = 310;
-export const LOGIN_H = 420;
+/** Grok login floating window — room for full upgrade sheet */
+export const LOGIN_W = 320;
+export const LOGIN_H = 480;
 
 /** Calendar */
 export const CAL_W = 300;

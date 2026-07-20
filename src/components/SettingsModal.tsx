@@ -83,7 +83,9 @@ export function SettingsModal({
     try {
       const s = await invoke<GrokAuthStatus>("logout_grok");
       setAuth(s);
-      setMsg("Signed out of Grok");
+      setMsg("Signed out — free calendar add is back");
+      // Calendar listens so manual “Add plan” returns
+      void emit("grok-logged-out", {}).catch(() => undefined);
     } catch (e) {
       setMsg(typeof e === "string" ? e : "Logout failed");
     } finally {
@@ -263,17 +265,21 @@ export function SettingsModal({
 
       <div className="baa-ios-card px-3.5 py-3 space-y-2.5">
         <p className="text-[14px] font-semibold tracking-[-0.01em] text-[#1C1C1E]">
-          Grok (basic)
+          Make Binky your AI assistant
         </p>
         <p className="text-[12px] text-[#8E8E93] leading-snug">
-          Binky chats with basic Grok — not Grok 4.5.
+          Free: calendar & share. With Grok, Binky becomes your AI assistant —
+          chat, answers, and mark plans by talking (basic Grok, not 4.5).
         </p>
         {auth?.loggedIn ? (
           <>
             <p className="text-[13px] text-[#34C759] font-medium">
-              Signed in
+              AI assistant on
               {auth.displayName ? ` · ${auth.displayName}` : ""}
               {auth.keyHint ? ` · ${auth.keyHint}` : ""}
+            </p>
+            <p className="text-[11px] text-[#8E8E93] leading-snug">
+              Manual “Add plan” is hidden — tell Binky in chat instead.
             </p>
             <button
               type="button"
@@ -281,7 +287,7 @@ export function SettingsModal({
               onClick={() => void logout()}
               className="baa-ios-btn baa-ios-btn-secondary w-full text-[13px] py-2.5 disabled:opacity-50"
             >
-              Sign out
+              Turn off AI (free calendar only)
             </button>
           </>
         ) : (
@@ -290,7 +296,7 @@ export function SettingsModal({
             onClick={() => setShowLogin(true)}
             className="baa-ios-btn baa-ios-btn-primary w-full text-[13px] py-2.5"
           >
-            Sign in to Grok
+            Make Binky my AI assistant
           </button>
         )}
       </div>
@@ -301,7 +307,7 @@ export function SettingsModal({
           onLoggedIn={(s) => {
             setAuth(s);
             setShowLogin(false);
-            setMsg("Signed in — open Chat and say hi to Binky");
+            setMsg("Upgraded — open Chat and say hi. Calendar manual add is off.");
             void emit("grok-logged-in", {}).catch(() => undefined);
           }}
           onCancel={() => setShowLogin(false)}

@@ -123,11 +123,12 @@ async function panelSize(
           : Math.min(CAL_H - PET_H + 40, 400)
       );
     case "chat":
+      // Tall enough for the Grok upgrade / login sheet (not just chat bubbles)
       return withShadowPad(
-        large ? CHAT_LARGE_W : CHAT_W,
+        large ? CHAT_LARGE_W : Math.max(CHAT_W, 320),
         large
-          ? Math.min(CHAT_LARGE_H - PET_H + 48, 520)
-          : Math.min(CHAT_H - PET_H + 48, 400)
+          ? Math.min(CHAT_LARGE_H - PET_H + 48, 540)
+          : Math.min(CHAT_H - PET_H + 80, 460)
       );
     case "color":
       return withShadowPad(COLOR_W, 300);

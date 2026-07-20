@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { calendarDayMark } from "../lib/defaultCalendar";
 import {
   buildMonthGrid,
@@ -8,8 +8,17 @@ import {
   monthLabel,
   toDateKey,
   todayKey,
+  type ScheduleCategory,
   type ScheduleEvent,
 } from "../lib/schedule";
+
+export type ManualScheduleInput = {
+  date: string;
+  title: string;
+  time?: string;
+  note?: string;
+  category: ScheduleCategory;
+};
 
 interface CalendarPanelProps {
   open: boolean;
@@ -18,13 +27,19 @@ interface CalendarPanelProps {
   onToggleSize?: () => void;
   onRemove: (id: string) => void;
   onClose: () => void;
+  /**
+   * When true (no Grok login), show a form so users can create schedules
+   * without chat. When Grok is signed in, chat marks the calendar instead.
+   */
+  allowManualCreate?: boolean;
+  onAdd?: (input: ManualScheduleInput) => void;
 }
 
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
 /**
- * Phoning-style calendar — view marks from chat; no manual type bar.
- * Use the expand button for a bigger view.
+ * Phoning-style calendar.
+ * Free: view + manual add. Grok upgrade: chat marks plans (manual form hidden).
  */
 export function CalendarPanel({
   open: _open,
@@ -33,11 +48,24 @@ export function CalendarPanel({
   onToggleSize,
   onRemove,
   onClose,
+  allowManualCreate = false,
+  onAdd,
 }: CalendarPanelProps) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [selected, setSelected] = useState(todayKey());
+  const [title, setTitle] = useState("");
+  const [time, setTime] = useState("");
+  const [category, setCategory] = useState<ScheduleCategory>("other");
+  const [formError, setFormError] = useState<string | null>(null);
+  /** Free tier: collapsed “+ Add plan” until user opens the form */
+  const [addOpen, setAddOpen] = useState(false);
+
+  // Keep form date in sync with the selected day
+  useEffect(() => {
+    setFormError(null);
+  }, [selected]);
 
   const marked = useMemo(() => datesWithEvents(events), [events]);
   const grid = useMemo(() => buildMonthGrid(year, month), [year, month]);
@@ -45,6 +73,27 @@ export function CalendarPanel({
     () => eventsOnDate(events, selected),
     [events, selected]
   );
+
+  const submitManual = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const t = title.trim();
+    if (!t) {
+      setFormError("Add a title");
+      return;
+    }
+    if (!onAdd) return;
+    onAdd({
+      date: selected,
+      title: t,
+      time: time.trim() || undefined,
+      category,
+    });
+    setTitle("");
+    setTime("");
+    setCategory("other");
+    setFormError(null);
+    setAddOpen(false);
+  };
 
   // Parent keeps us mounted during exit anim; `open` only gates interaction if needed
 
@@ -75,10 +124,15 @@ export function CalendarPanel({
   })();
 
   const panelW = large ? "w-[360px]" : "w-[280px]";
-  // Height fills the upper band only (parent is already clipped above the pet)
+  // Slightly taller only when the add form is expanded
+  const formExpanded = allowManualCreate && addOpen;
   const panelH = large
-    ? "h-[min(460px,100%)] max-h-full"
-    : "h-[min(320px,100%)] max-h-full";
+    ? formExpanded
+      ? "h-[min(500px,100%)] max-h-full"
+      : "h-[min(460px,100%)] max-h-full"
+    : formExpanded
+      ? "h-[min(380px,100%)] max-h-full"
+      : "h-[min(340px,100%)] max-h-full";
   const dayH = large ? "h-9" : "h-6";
   const dayText = large ? "text-[12px]" : "text-[10px]";
 
@@ -114,7 +168,13 @@ export function CalendarPanel({
             Binky
           </p>
           <p className="text-[10px] text-neutral-400 leading-none truncate">
-            calendar{large ? " · large" : ""}
+            {allowManualCreate
+              ? large
+                ? "calendar · free"
+                : "add plans free"
+              : large
+                ? "calendar · chat marks"
+                : "chat marks plans"}
           </p>
         </div>
 
@@ -123,8 +183,9 @@ export function CalendarPanel({
             type="button"
             onClick={onToggleSize}
             className="shrink-0 text-[10px] px-2 py-1 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700 font-semibold"
+            title={large ? "Smaller panel" : "Larger panel"}
           >
-            {large ? "Smaller" : "Bigger"}
+            {large ? "Hanni" : "Hyein"}
           </button>
         )}
 
@@ -280,7 +341,9 @@ export function CalendarPanel({
                 Binky
               </p>
               <div className="max-w-[95%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-                No plans this day. Tell me in chat and I’ll mark it here!
+                {allowManualCreate
+                  ? "No plans this day. Add one below — free, no Grok needed."
+                  : "No plans this day. Tell me in chat and I’ll mark it here!"}
               </div>
             </div>
           </div>
@@ -350,6 +413,99 @@ export function CalendarPanel({
           ))
         )}
       </div>
+
+      {/* Free tier: one slim “+ Add plan” bar; expand only when needed */}
+      {allowManualCreate && onAdd && (
+        <div className="shrink-0 border-t border-black/[0.06] bg-white">
+          {!addOpen ? (
+            <button
+              type="button"
+              onClick={() => setAddOpen(true)}
+              className="w-full h-9 flex items-center justify-center gap-1.5 text-[12px] font-semibold text-[#007AFF] hover:bg-black/[0.03]"
+            >
+              <span className="text-[15px] leading-none" aria-hidden>
+                +
+              </span>
+              Add plan
+              <span className="text-[10px] font-normal text-neutral-400">
+                · {selectedLabel}
+              </span>
+            </button>
+          ) : (
+            <form
+              onSubmit={submitManual}
+              className="px-2.5 py-2 space-y-1.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold text-neutral-600">
+                  New plan · {selectedLabel}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddOpen(false);
+                    setFormError(null);
+                  }}
+                  className="text-[10px] font-semibold text-neutral-400 hover:text-neutral-600 px-1"
+                >
+                  Cancel
+                </button>
+              </div>
+              <div className="flex gap-1.5 items-center">
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Title"
+                  autoFocus
+                  className="flex-1 min-w-0 h-8 rounded-full border border-neutral-200 bg-[#F7F7F8] px-3 text-[12px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-400 focus:bg-white"
+                />
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  className="shrink-0 h-8 w-[6.5rem] rounded-full border border-neutral-200 bg-[#F7F7F8] px-1.5 text-[11px] text-neutral-800 outline-none focus:border-neutral-400"
+                  aria-label="Time (optional)"
+                />
+              </div>
+              <div className="flex gap-1.5 items-center">
+                <button
+                  type="button"
+                  onClick={() => setCategory("other")}
+                  className={`flex-1 h-7 rounded-full text-[10px] font-semibold border ${
+                    category === "other"
+                      ? "bg-violet-600/12 text-violet-800 border-violet-300"
+                      : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
+                  }`}
+                >
+                  📅 other
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCategory("work")}
+                  className={`flex-1 h-7 rounded-full text-[10px] font-semibold border ${
+                    category === "work"
+                      ? "bg-sky-600/15 text-sky-800 border-sky-300"
+                      : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
+                  }`}
+                >
+                  💼 work
+                </button>
+                <button
+                  type="submit"
+                  disabled={!title.trim()}
+                  className="shrink-0 h-7 px-3.5 rounded-full bg-neutral-900 hover:bg-neutral-800 disabled:opacity-35 text-white text-[11px] font-semibold"
+                >
+                  Save
+                </button>
+              </div>
+              {formError && (
+                <p className="text-[10px] text-rose-500 px-0.5">{formError}</p>
+              )}
+            </form>
+          )}
+        </div>
+      )}
     </div>
   );
 }

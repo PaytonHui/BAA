@@ -148,6 +148,8 @@ function animatePetScaleHome(
 export default function App() {
   const [expression, setExpression] = useState<PetExpression>("idle");
   const [chatOpen, setChatOpen] = useState(false);
+  /** Grok signed in → left-click opens chat; free tier → calendar */
+  const grokLoggedInRef = useRef(false);
   /**
    * Window/layout shell (main WebGL window only):
    * - compact: pet only
@@ -618,6 +620,24 @@ export default function App() {
       unlisten?.();
     };
   }, [fireAnim]);
+
+  // Grok login status — free tier left-click opens calendar, not chat
+  useEffect(() => {
+    const refresh = () => {
+      void invoke<{ loggedIn?: boolean }>("grok_auth_status")
+        .then((s) => {
+          grokLoggedInRef.current = !!s.loggedIn;
+        })
+        .catch(() => {
+          grokLoggedInRef.current = false;
+        });
+    };
+    refresh();
+    const unsubs: Array<() => void> = [];
+    void listen("grok-logged-in", refresh).then((u) => unsubs.push(u));
+    void listen("grok-logged-out", refresh).then((u) => unsubs.push(u));
+    return () => unsubs.forEach((u) => u());
+  }, []);
 
   // Separate chat window → pet expressions + schedule refresh
   useEffect(() => {
@@ -1662,10 +1682,21 @@ export default function App() {
    * Sync lightstick schedule into Apple Calendar named “BAA”.
    * Same Apple ID → iPhone sees events under BAA (not Family).
    */
+  const mapEventsForCal = (events: ScheduleEvent[]) =>
+    events.map((e) => ({
+      id: e.id,
+      date: e.date,
+      title: e.title,
+      time: e.time ?? null,
+      note: e.note ?? null,
+      category: e.category ?? null,
+    }));
+
   const syncToAppleCalendar = useCallback(async () => {
     await collapseMenuIfOpen();
 
-    const events = loadSchedule();
+    // Always re-read disk — other windows (calendar) write there
+    const events = await reloadScheduleFromDisk().catch(() => loadSchedule());
     if (events.length === 0) {
       fireAnim("wake");
       setExpression("thinking");
@@ -1676,17 +1707,10 @@ export default function App() {
 
     try {
       const n = await invoke<number>("sync_apple_calendar", {
-        events: events.map((e) => ({
-          id: e.id,
-          date: e.date,
-          title: e.title,
-          time: e.time ?? null,
-          note: e.note ?? null,
-          category: e.category ?? null,
-        })),
+        events: mapEventsForCal(events),
       });
       console.log("[calendar] synced", n, "events → Apple Calendar “BAA”");
-      fireAnim("color"); // quick job-done light cycle
+      fireAnim("color");
       setExpression("happy");
       window.setTimeout(() => setExpression("idle"), 1400);
     } catch (e) {
@@ -1697,14 +1721,12 @@ export default function App() {
   }, [collapseMenuIfOpen, fireAnim]);
 
   /**
-   * AirDrop calendar — does NOT dump .ics into Family.
-   * Writes events to Apple Calendar “BAA” (iCloud), cleans Family leftovers,
-   * then AirDrops a short note to pick your iPhone.
+   * AirDrop calendar as BAA.ics (plus best-effort Mac Calendar “BAA” sync).
    */
   const airDropCalendar = useCallback(async () => {
     await collapseMenuIfOpen();
 
-    const events = loadSchedule();
+    const events = await reloadScheduleFromDisk().catch(() => loadSchedule());
     if (events.length === 0) {
       fireAnim("wake");
       setExpression("thinking");
@@ -1715,17 +1737,10 @@ export default function App() {
 
     try {
       const msg = await invoke<string>("airdrop_baa_calendar", {
-        events: events.map((e) => ({
-          id: e.id,
-          date: e.date,
-          title: e.title,
-          time: e.time ?? null,
-          note: e.note ?? null,
-          category: e.category ?? null,
-        })),
+        events: mapEventsForCal(events),
       });
       console.log("[airdrop]", msg);
-      fireAnim("color"); // quick job-done light cycle
+      fireAnim("color");
       setExpression("happy");
       window.setTimeout(() => setExpression("idle"), 1400);
     } catch (e) {
@@ -2095,8 +2110,9 @@ export default function App() {
       }
       return;
     }
-    // Tap body: dismiss open panel / menu, else toggle chat.
-    // Do NOT open chat while closing another panel.
+    // Tap body: dismiss open panel / menu, else toggle primary panel.
+    // Free (no Grok): calendar. Upgraded: chat.
+    // Do NOT open a panel while closing another.
     if (e.button === 0) {
       if (loginOpen) {
         await closeGrokLogin();
@@ -2124,8 +2140,13 @@ export default function App() {
       }
       if (chatOpenRef.current) {
         await closeChat();
-      } else {
+        return;
+      }
+      if (grokLoggedInRef.current) {
         await openChat();
+      } else {
+        // Free tier — left-click opens calendar (no Chat in function list either)
+        await openCalendarRef.current?.();
       }
     }
   };

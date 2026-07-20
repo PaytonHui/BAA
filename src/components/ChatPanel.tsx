@@ -227,7 +227,7 @@ export function ChatPanel({
             onClick={onToggleSize}
             className="shrink-0 text-[10px] px-2 py-1 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700 font-semibold"
           >
-            {large ? "Smaller" : "Bigger"}
+            {large ? "Hanni" : "Hyein"}
           </button>
         )}
       </header>

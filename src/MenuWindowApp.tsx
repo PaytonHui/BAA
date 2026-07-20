@@ -40,6 +40,16 @@ export type MenuAction =
 export default function MenuWindowApp() {
   const [muted, setMuted] = useState(() => isMuted());
   const [open, setOpen] = useState(true);
+  const [showChat, setShowChat] = useState(true);
+
+  const refreshAuth = useCallback(async () => {
+    try {
+      const s = await invoke<{ loggedIn?: boolean }>("grok_auth_status");
+      setShowChat(!!s.loggedIn);
+    } catch {
+      setShowChat(false);
+    }
+  }, []);
 
   useEffect(() => {
     invoke("pin_to_all_spaces_cmd").catch(() => undefined);
@@ -49,13 +59,15 @@ export default function MenuWindowApp() {
     getCurrentWindow()
       .setAlwaysOnTop(true)
       .catch(() => undefined);
-  }, []);
+    void refreshAuth();
+  }, [refreshAuth]);
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
     const onShow = () => {
       setMuted(isMuted());
       setOpen(true);
+      void refreshAuth();
       // Full list height so every item is visible
       void getCurrentWindow()
         .setSize(menuWindowSize(false))
@@ -63,8 +75,14 @@ export default function MenuWindowApp() {
     };
     void listen("menu-window-shown", onShow).then((u) => unsubs.push(u));
     void listen("menu-window-data", onShow).then((u) => unsubs.push(u));
+    void listen("grok-logged-in", () => {
+      void refreshAuth();
+    }).then((u) => unsubs.push(u));
+    void listen("grok-logged-out", () => {
+      void refreshAuth();
+    }).then((u) => unsubs.push(u));
     return () => unsubs.forEach((u) => u());
-  }, []);
+  }, [refreshAuth]);
 
   const onSupportOpenChange = useCallback((supportOpen: boolean) => {
     void getCurrentWindow()
@@ -110,6 +128,7 @@ export default function MenuWindowApp() {
         floating
         open={open}
         muted={muted}
+        showChat={showChat}
         onClose={() => void close()}
         onChat={() => void act("chat")}
         onCalendar={() => void act("calendar")}

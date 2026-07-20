@@ -1,6 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { loadSchedule } from "../lib/schedule";
+import {
+  hydrateSchedule,
+  loadSchedule,
+  reloadScheduleFromDisk,
+  type ScheduleEvent,
+} from "../lib/schedule";
 
 interface LinkPhonePanelProps {
   open: boolean;
@@ -8,17 +13,25 @@ interface LinkPhonePanelProps {
 }
 
 /**
- * Share calendar — iOS glass panel (chat/calendar UI unchanged).
+ * Share calendar — free, no Grok. Sync / AirDrop use disk schedule.
  */
 export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [events, setEvents] = useState<ScheduleEvent[]>(() => loadSchedule());
+
+  useEffect(() => {
+    if (!open) return;
+    setMsg(null);
+    void reloadScheduleFromDisk()
+      .catch(() => hydrateSchedule())
+      .then(setEvents);
+  }, [open]);
 
   if (!open) return null;
 
-  const events = loadSchedule();
-  const payload = () =>
-    events.map((e) => ({
+  const payload = (list: ScheduleEvent[]) =>
+    list.map((e) => ({
       id: e.id,
       date: e.date,
       title: e.title,
@@ -28,28 +41,37 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
     }));
 
   const run = async (kind: "sync" | "airdrop") => {
-    if (events.length === 0) {
-      setMsg("No events yet — add some in Calendar first");
-      return;
-    }
     setBusy(true);
     setMsg(null);
     try {
+      // Fresh disk read so calendar window adds are included
+      const list = await reloadScheduleFromDisk().catch(() => loadSchedule());
+      setEvents(list);
+      if (list.length === 0) {
+        setMsg("No events yet — add some in Calendar first");
+        return;
+      }
       if (kind === "sync") {
         const n = await invoke<number>("sync_apple_calendar", {
-          events: payload(),
+          events: payload(list),
         });
         setMsg(
           `Synced ${n} to calendar “BAA”. On iPhone enable Calendars → BAA (not Family).`
         );
       } else {
         const text = await invoke<string>("airdrop_baa_calendar", {
-          events: payload(),
+          events: payload(list),
         });
         setMsg(text);
       }
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      const raw =
+        typeof e === "string"
+          ? e
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      setMsg(raw);
     } finally {
       setBusy(false);
     }
@@ -74,6 +96,9 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
           Done
         </button>
       </div>
+      <p className="text-[12px] text-[#8E8E93] leading-snug">
+        Free — no Grok login. Add plans in Calendar first, then share.
+      </p>
       <p className="text-[13px] text-[#8E8E93] leading-snug">
         <span className="font-semibold text-[#1C1C1E]">AirDrop</span> sends{" "}
         <span className="font-semibold text-[#1C1C1E]">BAA.ics</span>. On

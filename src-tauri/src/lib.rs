@@ -347,6 +347,12 @@ struct BaaCalEvent {
 fn sync_apple_calendar(events: Vec<BaaCalEvent>) -> Result<usize, String> {
     #[cfg(target_os = "macos")]
     {
+        let events = resolve_baa_events(events)?;
+        // Ensure Calendar.app is running so AppleScript can talk to it
+        let _ = std::process::Command::new("open")
+            .args(["-ga", "Calendar"])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(400));
         sync_baa_calendar_macos(&events)
     }
     #[cfg(not(target_os = "macos"))]
@@ -704,6 +710,28 @@ fn build_ics_from_events(events: &[BaaCalEvent]) -> String {
     out
 }
 
+/// Prefer disk schedule (shared across windows) when the frontend payload is empty/stale.
+fn resolve_baa_events(events: Vec<BaaCalEvent>) -> Result<Vec<BaaCalEvent>, String> {
+    if !events.is_empty() {
+        return Ok(events);
+    }
+    let disk = schedule_store::load_schedule()?;
+    if disk.is_empty() {
+        return Err("No events to share — add plans in Calendar first".into());
+    }
+    Ok(disk
+        .into_iter()
+        .map(|e| BaaCalEvent {
+            id: e.id,
+            date: e.date,
+            title: e.title,
+            time: e.time,
+            note: e.note,
+            category: e.category,
+        })
+        .collect())
+}
+
 /// AirDrop the lightstick schedule as `BAA.ics`.
 /// Best-effort also mirrors events into Apple Calendar “BAA” (does not block share).
 #[tauri::command]
@@ -711,12 +739,10 @@ fn airdrop_baa_calendar(
     app: tauri::AppHandle,
     events: Vec<BaaCalEvent>,
 ) -> Result<String, String> {
+    let events = resolve_baa_events(events)?;
     let n = events.len();
-    if n == 0 {
-        return Err("No events to share — add plans in Calendar first".into());
-    }
 
-    // Best-effort iCloud calendar mirror (ignore automation errors)
+    // Best-effort iCloud calendar mirror (ignore automation errors — Calendar may be closed)
     let synced = sync_apple_calendar(events.clone()).unwrap_or(0);
 
     let ics = build_ics_from_events(&events);
@@ -736,7 +762,7 @@ fn airdrop_baa_calendar(
     }
 
     Ok(format!(
-        "AirDrop ready ({n} events). On iPhone: open BAA.ics → pick calendar “BAA” (not Family).{}",
+        "AirDrop sheet opened ({n} events). Pick your iPhone → open BAA.ics → calendar “BAA” (not Family).{}",
         if synced > 0 {
             format!(" Also synced {synced} to Mac calendar BAA.")
         } else {
@@ -769,13 +795,13 @@ fn airdrop_ics(app: tauri::AppHandle, contents: String) -> Result<String, String
     Ok(path.display().to_string())
 }
 
-/// Share a file via AirDrop (main-thread AppKit). Falls back to Finder reveal.
+/// Share a file via AirDrop (main-thread AppKit). Falls back to Finder + open.
 #[cfg(target_os = "macos")]
 fn share_file_airdrop(app: &tauri::AppHandle, path: &std::path::Path) -> Result<(), String> {
     let path_buf = path.to_path_buf();
     let path_display = path.display().to_string();
 
-    // Prefer main-thread AppKit; fall back to direct call if scheduling fails.
+    // Prefer main-thread AppKit (required for NSSharingService).
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     let sent = app
         .run_on_main_thread(move || {
@@ -785,41 +811,56 @@ fn share_file_airdrop(app: &tauri::AppHandle, path: &std::path::Path) -> Result<
         .is_ok();
 
     let result = if sent {
-        rx.recv_timeout(std::time::Duration::from_secs(2))
-            .unwrap_or_else(|_| unsafe { airdrop_perform(path) })
+        // Share sheet can take a moment to appear — don't fall back too early
+        // from a non-main thread (that path usually fails).
+        rx.recv_timeout(std::time::Duration::from_secs(12))
+            .unwrap_or_else(|_| Err("AirDrop timed out waiting for share UI".into()))
     } else {
-        unsafe { airdrop_perform(path) }
+        Err("Could not schedule AirDrop on main thread".into())
     };
 
     match result {
         Ok(()) => Ok(()),
         Err(e) => {
-            // Always leave the file visible so share still works manually
+            // Fallbacks so the user always gets a usable .ics
             let _ = std::process::Command::new("open")
                 .args(["-R", &path_display])
                 .status();
+            // Also try opening the file (Calendar import on Mac)
+            let _ = std::process::Command::new("open").arg(&path_display).status();
             Err(format!(
-                "{e} — BAA.ics is in Finder: right‑click → Share → AirDrop"
+                "{e}\n\nBAA.ics is open in Finder — select it → Share → AirDrop.\n\
+Or open BAA.ics on this Mac to import into Calendar."
             ))
         }
     }
 }
 
-/// Direct AirDrop via NSSharingService (must be used on main thread when possible).
+/// Direct AirDrop via NSSharingService (must run on main thread).
 #[cfg(target_os = "macos")]
 unsafe fn airdrop_perform(path: &std::path::Path) -> Result<(), String> {
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject};
     use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
 
-    let path_c = CString::new(path.to_string_lossy().as_bytes())
-        .map_err(|_| "invalid path".to_string())?;
+    // Absolute path (required for reliable fileURLWithPath)
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path_bytes = abs.as_os_str().as_bytes();
+    let path_c = CString::new(path_bytes).map_err(|_| "invalid path".to_string())?;
     let airdrop_name = CString::new("com.apple.share.AirDrop.send").unwrap();
 
     let ns_string = AnyClass::get(c"NSString").ok_or("NSString missing")?;
     let ns_url = AnyClass::get(c"NSURL").ok_or("NSURL missing")?;
     let ns_array = AnyClass::get(c"NSArray").ok_or("NSArray missing")?;
     let share_cls = AnyClass::get(c"NSSharingService").ok_or("NSSharingService missing")?;
+    let ns_app = AnyClass::get(c"NSApplication").ok_or("NSApplication missing")?;
+
+    // Bring BAA to front so the share sheet is not hidden behind always-on-top chrome
+    let app: *mut AnyObject = msg_send![ns_app, sharedApplication];
+    if !app.is_null() {
+        let _: () = msg_send![app, activateIgnoringOtherApps: true];
+    }
 
     let path_ns: *mut AnyObject = msg_send![ns_string, stringWithUTF8String: path_c.as_ptr()];
     if path_ns.is_null() {
@@ -829,16 +870,23 @@ unsafe fn airdrop_perform(path: &std::path::Path) -> Result<(), String> {
     if file_url.is_null() {
         return Err("file URL failed".into());
     }
-    // Ensure file:// URL is absolute
     let items: *mut AnyObject = msg_send![ns_array, arrayWithObject: file_url];
+    if items.is_null() {
+        return Err("NSArray items failed".into());
+    }
     let name_ns: *mut AnyObject =
         msg_send![ns_string, stringWithUTF8String: airdrop_name.as_ptr()];
     let service: *mut AnyObject = msg_send![share_cls, sharingServiceNamed: name_ns];
     if service.is_null() {
-        return Err("AirDrop service unavailable".into());
+        return Err("AirDrop service unavailable on this Mac".into());
     }
 
-    // Always attempt — canPerform is flaky for always-on-top apps
+    // Prefer canPerform when available (skips silent no-ops)
+    let can: bool = msg_send![service, canPerformWithItems: items];
+    if !can {
+        // Still try perform — canPerform is flaky for some file types / policies
+    }
+
     let _: () = msg_send![service, performWithItems: items];
     Ok(())
 }
