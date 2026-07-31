@@ -1,6 +1,7 @@
 /**
- * Function list as a separate floating window — main pet never resizes
- * (same pattern as chat/calendar → no afterimage / jiggle).
+ * Function list as a separate floating window — main pet never resizes.
+ *
+ * Sync: emit to main window only (main stays alive).
  */
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -20,7 +21,6 @@ import {
   PANEL_SHADOW_PAD,
 } from "./lib/windowLayout";
 
-/** Comfortable function-list size; top is aligned with entity by positionNearPet. */
 function menuWindowSize(supportOpen: boolean): LogicalSize {
   const h = supportOpen ? MENU_PANEL_H_SUPPORT : MENU_PANEL_H;
   const pad = PANEL_SHADOW_PAD * 2;
@@ -33,7 +33,6 @@ export type MenuAction =
   | "color"
   | "settings"
   | "sync"
-  | "airdrop"
   | "hide"
   | "quit";
 
@@ -43,7 +42,6 @@ export default function MenuWindowApp() {
   const [showChat, setShowChat] = useState(true);
 
   const refreshAuth = useCallback(async () => {
-    // AI chat is coming soon — never show Chat in the function list
     setShowChat(false);
   }, []);
 
@@ -64,7 +62,6 @@ export default function MenuWindowApp() {
       setMuted(isMuted());
       setOpen(true);
       void refreshAuth();
-      // Full list height so every item is visible
       void getCurrentWindow()
         .setSize(menuWindowSize(false))
         .catch(() => undefined);
@@ -103,13 +100,11 @@ export default function MenuWindowApp() {
     await emit("menu-closed", {}).catch(() => undefined);
   });
 
+  /** Tell main window to act, then close menu. */
   const act = useCallback(
     async (action: MenuAction) => {
       await emit("menu-action", { action }).catch(() => undefined);
-      // Keep menu open only for quick local actions that need it
-      if (action !== "sync" && action !== "airdrop") {
-        await close();
-      }
+      await close();
     },
     [close]
   );
@@ -136,7 +131,6 @@ export default function MenuWindowApp() {
         }}
         onSettings={() => void act("settings")}
         onSyncCalendar={() => void act("sync")}
-        onAirDropCalendar={() => void act("airdrop")}
         onHide={() => void act("hide")}
         onQuit={() => void act("quit")}
         onSupportOpenChange={onSupportOpenChange}

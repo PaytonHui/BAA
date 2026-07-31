@@ -48,6 +48,15 @@ export const CAL_W = 300;
 export const CAL_H = 612;
 export const CAL_LARGE_W = 380;
 export const CAL_LARGE_H = 752;
+/**
+ * Calendar outer content heights (before shadow pad).
+ * Keep snug to the card — oversized windows show a white strip under transparent panels.
+ */
+export const CAL_VIEW_H = 448;
+export const CAL_VIEW_LARGE_H = 520;
+/** Fallback when form open (before ResizeObserver measures exact height) */
+export const CAL_FORM_H = 560;
+export const CAL_FORM_LARGE_H = 620;
 
 /**
  * Function list is a SEPARATE floating window (like chat) so the pet
@@ -55,7 +64,7 @@ export const CAL_LARGE_H = 752;
  */
 export const MENU_PANEL_W = 188;
 /** Function list content height — snug to items (no empty top/bottom) */
-export const MENU_PANEL_H = 392;
+export const MENU_PANEL_H = 360;
 /** With Support BAA expanded (QR + coffee button) */
 export const MENU_PANEL_H_SUPPORT = 560;
 /**
@@ -69,8 +78,8 @@ export const MENU_SHADOW_PAD = PANEL_SHADOW_PAD;
 export const MENU_W = PET_W + MENU_PANEL_W;
 export const MENU_H = PET_H;
 
-/** Care speech bubble strip (wide enough for weather lines + emoji) */
-export const CARE_PANEL_W = 200;
+/** Care speech bubble strip (wide enough for sync status + weather lines) */
+export const CARE_PANEL_W = 220;
 export const CARE_W = PET_W + CARE_PANEL_W;
 export const CARE_H = PET_H;
 

@@ -18,9 +18,12 @@ pub struct ScheduleEventDto {
     pub title: String,
     #[serde(default)]
     pub time: Option<String>,
+    /// Optional end time "HH:mm" (same day)
+    #[serde(default)]
+    pub end_time: Option<String>,
     #[serde(default)]
     pub note: Option<String>,
-    /// "work" | "other"
+    /// "work" | "school" | "event" | "family" | "friends" (legacy: "other" → event)
     #[serde(default)]
     pub category: Option<String>,
     #[serde(default)]

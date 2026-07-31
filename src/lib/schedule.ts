@@ -3,8 +3,147 @@
 import { invoke } from "@tauri-apps/api/core";
 import { mergeDefaultCalendarEvents } from "./defaultCalendar";
 
-/** work = remind 3h before; other = remind 1h before */
-export type ScheduleCategory = "work" | "other";
+/**
+ * Plan types (emoji shown on calendar + add form).
+ * work = remind 3h before; others = 1h before.
+ * Legacy stored value `"other"` is treated as `"event"`.
+ */
+export type ScheduleCategory =
+  | "work"
+  | "event"
+  | "family"
+  | "friends"
+  | "school";
+
+export const SCHEDULE_CATEGORIES: ScheduleCategory[] = [
+  "work",
+  "school",
+  "event",
+  "family",
+  "friends",
+];
+
+export const CATEGORY_META: Record<
+  ScheduleCategory,
+  {
+    emoji: string;
+    label: string;
+    leadHours: number;
+    /** Tailwind classes for chips in list / form */
+    chip: string;
+    /** Soft day-cell fill when this type is present */
+    dayBg: string;
+    dayText: string;
+  }
+> = {
+  work: {
+    emoji: "💼",
+    label: "work",
+    leadHours: 3,
+    chip: "bg-sky-600/15 text-sky-800 border-sky-300",
+    dayBg: "bg-sky-100/90",
+    dayText: "text-sky-900",
+  },
+  school: {
+    emoji: "📚",
+    label: "school",
+    leadHours: 1,
+    chip: "bg-emerald-600/12 text-emerald-900 border-emerald-300",
+    dayBg: "bg-emerald-100/90",
+    dayText: "text-emerald-950",
+  },
+  event: {
+    emoji: "🎉",
+    label: "event",
+    leadHours: 1,
+    chip: "bg-violet-600/12 text-violet-800 border-violet-300",
+    dayBg: "bg-violet-100/90",
+    dayText: "text-violet-900",
+  },
+  family: {
+    emoji: "🏠",
+    label: "family",
+    leadHours: 1,
+    chip: "bg-amber-500/15 text-amber-900 border-amber-300",
+    dayBg: "bg-amber-100/90",
+    dayText: "text-amber-950",
+  },
+  friends: {
+    emoji: "🤝",
+    label: "friends",
+    leadHours: 1,
+    chip: "bg-rose-500/15 text-rose-800 border-rose-300",
+    dayBg: "bg-rose-100/90",
+    dayText: "text-rose-900",
+  },
+};
+
+/** Normalize any stored / chat value → a known type */
+export function normalizeCategory(raw: unknown): ScheduleCategory {
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  if (
+    s === "work" ||
+    s === "job" ||
+    s === "office" ||
+    s === "meeting" ||
+    s === "business"
+  ) {
+    return "work";
+  }
+  if (
+    s === "school" ||
+    s === "class" ||
+    s === "lecture" ||
+    s === "homework" ||
+    s === "study" ||
+    s === "exam" ||
+    s === "uni" ||
+    s === "university" ||
+    s === "college" ||
+    s === "上課" ||
+    s === "學校" ||
+    s === "功课" ||
+    s === "功課" ||
+    s === "考試"
+  ) {
+    return "school";
+  }
+  if (s === "family" || s === "home" || s === "家人" || s === "家庭") {
+    return "family";
+  }
+  if (
+    s === "friends" ||
+    s === "friend" ||
+    s === "social" ||
+    s === "朋友" ||
+    s === "friendship"
+  ) {
+    return "friends";
+  }
+  // event + legacy "other"
+  if (
+    s === "event" ||
+    s === "other" ||
+    s === "personal" ||
+    s === "life" ||
+    s === "private" ||
+    s === "fun" ||
+    s === "活動"
+  ) {
+    return "event";
+  }
+  return "event";
+}
+
+export function categoryEmoji(cat: ScheduleCategory): string {
+  return CATEGORY_META[cat].emoji;
+}
+
+export function categoryLabel(cat: ScheduleCategory): string {
+  return CATEGORY_META[cat].label;
+}
 
 export interface ScheduleEvent {
   id: string;
@@ -16,12 +155,57 @@ export interface ScheduleEvent {
    */
   endDate?: string;
   title: string;
-  /** optional "HH:mm" or free text */
+  /** optional start "HH:mm" (24h) */
   time?: string;
+  /** optional end "HH:mm" (24h), same calendar day as `date` */
+  endTime?: string;
   note?: string;
-  /** work | other — controls reminder lead time */
+  /** work | event | family | friends — type + reminder lead time */
   category?: ScheduleCategory;
   createdAt: number;
+}
+
+/** "14:00" or "14:00–16:00" for UI */
+export function formatTimeRange(
+  time?: string | null,
+  endTime?: string | null
+): string {
+  const start = (time || "").trim();
+  const end = (endTime || "").trim();
+  if (!start && !end) return "";
+  if (start && end) return `${start}–${end}`;
+  return start || end;
+}
+
+/** Normalize to "HH:mm" or undefined */
+export function normalizeHhmm(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const s = String(raw).trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return undefined;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (h > 23 || min > 59 || Number.isNaN(h) || Number.isNaN(min)) return undefined;
+  return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
+}
+
+/** Minutes from midnight for "HH:mm"; null if invalid */
+export function hhmmToMinutes(raw: string | undefined | null): number | null {
+  const n = normalizeHhmm(raw);
+  if (!n) return null;
+  const [h, min] = n.split(":").map(Number);
+  return h * 60 + min;
+}
+
+/** Add minutes to "HH:mm", wrapping at midnight */
+export function addMinutesToHhmm(raw: string, deltaMin: number): string {
+  const base = hhmmToMinutes(raw);
+  if (base == null) return raw;
+  let t = (base + deltaMin) % (24 * 60);
+  if (t < 0) t += 24 * 60;
+  const h = Math.floor(t / 60);
+  const m = t % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
 const STORAGE_KEY = "baa-schedule";
@@ -29,6 +213,42 @@ const STORAGE_KEY = "baa-schedule";
 /** In-memory cache (per webview). Disk is the source of truth across restarts. */
 let memoryCache: ScheduleEvent[] | null = null;
 let hydratePromise: Promise<ScheduleEvent[]> | null = null;
+/** Bumps on every local write — used to avoid clobbering a just-added plan. */
+let scheduleWriteGen = 0;
+
+/**
+ * Keep memory-only rows that disk has not caught up with yet (async save race).
+ * Without this, “+ Add plan” → emit → reloadFromDisk can wipe the new event.
+ */
+function mergePendingMemory(
+  disk: ScheduleEvent[],
+  mem: ScheduleEvent[] | null
+): ScheduleEvent[] {
+  if (!mem?.length) return disk;
+  const byId = new Map<string, ScheduleEvent>();
+  for (const e of disk) byId.set(e.id, e);
+  for (const e of mem) {
+    if (e.id.startsWith("baa-default:")) continue;
+    const d = byId.get(e.id);
+    if (!d) {
+      byId.set(e.id, e);
+      continue;
+    }
+    // Prefer the side that was updated more recently
+    if ((e.createdAt || 0) >= (d.createdAt || 0)) {
+      byId.set(e.id, { ...d, ...e, id: e.id });
+    }
+  }
+  // Preserve disk order, then append brand-new mem ids
+  const diskIds = new Set(disk.map((e) => e.id));
+  const out = disk.map((e) => byId.get(e.id) ?? e);
+  for (const e of mem) {
+    if (!diskIds.has(e.id) && !e.id.startsWith("baa-default:")) {
+      out.push(byId.get(e.id) ?? e);
+    }
+  }
+  return out;
+}
 
 function normalizeList(raw: unknown): ScheduleEvent[] {
   if (!Array.isArray(raw)) return [];
@@ -53,11 +273,16 @@ function normalizeList(raw: unknown): ScheduleEvent[] {
         date: e.date,
         endDate: endRaw && /^\d{4}-\d{2}-\d{2}$/.test(endRaw) ? endRaw : undefined,
         title: e.title,
-        time: e.time,
+        time: normalizeHhmm(e.time),
+        endTime: normalizeHhmm(
+          (e as ScheduleEvent).endTime ??
+            (e as unknown as { end_time?: string }).end_time
+        ),
         note: e.note,
         category:
-          e.category === "work" || e.category === "other"
-            ? e.category
+          (e as { category?: unknown }).category != null &&
+          String((e as { category?: unknown }).category).length > 0
+            ? normalizeCategory((e as { category?: unknown }).category)
             : undefined,
         createdAt:
           typeof e.createdAt === "number"
@@ -111,6 +336,7 @@ export function loadSchedule(): ScheduleEvent[] {
  * Fire-and-forget disk write (ok for UI toggles).
  */
 export function saveSchedule(events: ScheduleEvent[]) {
+  scheduleWriteGen += 1;
   memoryCache = events;
   writeLocalStorage(events);
   if (!isTauri()) return;
@@ -121,6 +347,7 @@ export function saveSchedule(events: ScheduleEvent[]) {
 
 /** Await disk write — use after chat marks so calendar reload sees data. */
 export async function saveScheduleAsync(events: ScheduleEvent[]) {
+  const gen = ++scheduleWriteGen;
   memoryCache = events;
   writeLocalStorage(events);
   if (!isTauri()) return;
@@ -134,6 +361,8 @@ export async function saveScheduleAsync(events: ScheduleEvent[]) {
         )
       ),
     ]);
+    // Another save started while we waited — don't treat as failure
+    void gen;
   } catch (e) {
     console.error("[schedule] disk save failed", e);
     // Keep memory + localStorage; disk may catch up on next write
@@ -198,7 +427,10 @@ export async function hydrateSchedule(): Promise<ScheduleEvent[]> {
 /** Force re-read from disk (after another window saved). */
 export async function reloadScheduleFromDisk(): Promise<ScheduleEvent[]> {
   hydratePromise = null;
-  memoryCache = null;
+  // Keep a snapshot of in-flight local writes so a slow disk read cannot
+  // erase a plan the user just added in this webview.
+  const memSnap = memoryCache;
+  const genAtStart = scheduleWriteGen;
   if (!isTauri()) {
     return withDefaults(loadSchedule());
   }
@@ -214,10 +446,16 @@ export async function reloadScheduleFromDisk(): Promise<ScheduleEvent[]> {
         ),
       ])
     );
-    writeLocalStorage(disk);
-    return withDefaults(disk);
+    // If user saved again while we were loading, trust the latest memory
+    if (scheduleWriteGen !== genAtStart && memoryCache) {
+      return withDefaults(memoryCache);
+    }
+    const merged = mergePendingMemory(disk, memSnap);
+    writeLocalStorage(merged);
+    memoryCache = merged;
+    return withDefaults(merged);
   } catch {
-    return withDefaults(loadSchedule());
+    return withDefaults(memSnap ?? loadSchedule());
   }
 }
 
@@ -280,35 +518,39 @@ function parseEventArray(
       ) || undefined;
     const title = String(o.title ?? o.name ?? o.event ?? "").trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !title) continue;
-    const timeRaw = o.time ?? o.when;
+    const timeRaw = o.time ?? o.when ?? o.startTime ?? o.start_time;
+    const endTimeRaw = o.endTime ?? o.end_time ?? o.untilTime ?? o.finish;
     const noteRaw = o.note ?? o.notes ?? o.desc;
     const catRaw = String(
       o.category ?? o.type ?? o.kind ?? o.tag ?? ""
     )
       .trim()
       .toLowerCase();
-    let category: ScheduleCategory | undefined;
-    if (
-      catRaw === "work" ||
-      catRaw === "job" ||
-      catRaw === "office" ||
-      catRaw === "meeting" ||
-      catRaw === "business"
-    ) {
-      category = "work";
-    } else if (
-      catRaw === "other" ||
-      catRaw === "personal" ||
-      catRaw === "life" ||
-      catRaw === "event" ||
-      catRaw === "private" ||
-      catRaw === "fun"
-    ) {
-      category = "other";
+    let category: ScheduleCategory;
+    if (catRaw) {
+      category = normalizeCategory(catRaw);
     } else if (looksLikeWork(title, noteRaw ? String(noteRaw) : "")) {
       category = "work";
+    } else if (
+      /school|class|lecture|homework|exam|study|上課|學校|功課|考試|tutorial/i.test(
+        `${title} ${noteRaw || ""}`
+      )
+    ) {
+      category = "school";
+    } else if (
+      /family|家人|家庭|父母|媽媽|爸爸|kids|kid|child/i.test(
+        `${title} ${noteRaw || ""}`
+      )
+    ) {
+      category = "family";
+    } else if (
+      /friend|朋友|hangout|party|dinner with/i.test(
+        `${title} ${noteRaw || ""}`
+      )
+    ) {
+      category = "friends";
     } else {
-      category = "other";
+      category = "event";
     }
     const end =
       endDate && endDate >= date && endDate !== date ? endDate : undefined;
@@ -316,7 +558,8 @@ function parseEventArray(
       date,
       endDate: end,
       title,
-      time: timeRaw ? String(timeRaw).trim() || undefined : undefined,
+      time: normalizeHhmm(timeRaw),
+      endTime: normalizeHhmm(endTimeRaw),
       note: noteRaw ? String(noteRaw).trim() || undefined : undefined,
       category,
     });
@@ -354,13 +597,13 @@ export function looksLikeWork(title: string, note = ""): boolean {
 }
 
 export function eventCategory(e: ScheduleEvent): ScheduleCategory {
-  if (e.category === "work" || e.category === "other") return e.category;
-  return looksLikeWork(e.title, e.note || "") ? "work" : "other";
+  if (e.category) return normalizeCategory(e.category);
+  return looksLikeWork(e.title, e.note || "") ? "work" : "event";
 }
 
-/** Hours before event to remind: work=3, other=1 */
+/** Hours before event to remind: work=3, others=1 */
 export function reminderLeadHours(e: ScheduleEvent): number {
-  return eventCategory(e) === "work" ? 3 : 1;
+  return CATEGORY_META[eventCategory(e)].leadHours;
 }
 
 /** Parse event local Date from date + optional time (defaults 09:00 if missing) */
@@ -483,6 +726,7 @@ export function getDueReminders(
     if (t < remindAt) continue;
 
     const cat = eventCategory(e);
+    const meta = CATEGORY_META[cat];
     const timeLabel = e.time?.trim() || start.toLocaleTimeString(undefined, {
       hour: "numeric",
       minute: "2-digit",
@@ -499,11 +743,11 @@ export function getDueReminders(
       event: e,
       start,
       leadHours: leadH,
-      emoji: cat === "work" ? "💼" : "📅",
+      emoji: meta.emoji,
       message:
         cat === "work"
           ? `Work soon: “${e.title}” at ${timeLabel} (${when})!`
-          : `Coming up: “${e.title}” at ${timeLabel} (${when})!`,
+          : `${meta.emoji} ${meta.label}: “${e.title}” at ${timeLabel} (${when})!`,
     });
   }
 
@@ -620,17 +864,25 @@ export function applyScheduleUpserts(
         date: e.date || prev.date,
         endDate:
           e.endDate !== undefined ? e.endDate || undefined : prev.endDate,
-        time: e.time !== undefined ? e.time : prev.time,
+        time: e.time !== undefined ? normalizeHhmm(e.time) : prev.time,
+        endTime:
+          e.endTime !== undefined
+            ? normalizeHhmm(e.endTime) || undefined
+            : prev.endTime,
         note: e.note !== undefined ? e.note : prev.note,
-        // Category always applied when provided (work | other)
+        // Category always applied when provided
         category:
-          e.category === "work" || e.category === "other"
-            ? e.category
-            : prev.category,
+          e.category != null
+            ? normalizeCategory(e.category)
+            : prev.category
+              ? normalizeCategory(prev.category)
+              : undefined,
+        createdAt: Date.now(),
       };
       const changed =
         eventCategory(merged) !== eventCategory(prev) ||
         (merged.time || "") !== (prev.time || "") ||
+        (merged.endTime || "") !== (prev.endTime || "") ||
         (merged.note || "") !== (prev.note || "") ||
         (merged.endDate || "") !== (prev.endDate || "") ||
         merged.title !== prev.title;
@@ -642,11 +894,11 @@ export function applyScheduleUpserts(
         id: makeEventId(),
         createdAt: Date.now(),
         category:
-          e.category === "work" || e.category === "other"
-            ? e.category
+          e.category != null
+            ? normalizeCategory(e.category)
             : looksLikeWork(e.title, e.note || "")
               ? "work"
-              : "other",
+              : "event",
       };
       next.push(created);
       added.push(created);
@@ -962,12 +1214,18 @@ export function resolveScheduleEventsFromChat(
   return modelEvents;
 }
 
-/** Activity words that usually mean “put this on the calendar” */
+/**
+ * JS `\b` only works at ASCII word edges — Chinese has no `\w` letters, so
+ * patterns like `\b聽日\b` never match. Use bare CJK / no-`\b` for those.
+ */
 function hasPlanActivity(text: string): boolean {
-  return /\b(dinner|lunch|breakfast|brunch|meal|supper|coffee|tea|meeting|meet|call|class|exam|flight|train|appointment|appt|date|party|workout|gym|movie|cinema|concert|show|interview|deadline|submit|pickup|dropoff|lesson|tutorial|lecture|doctor|dentist|haircut)\b/i.test(
-    text
-  ) || /(晚飯|晚餐|午餐|午飯|早餐|食飯|約會|會議|開會|上堂|考試|飛機|趕deadline|Deadline)/i.test(
-    text
+  return (
+    /\b(dinner|lunch|breakfast|brunch|meal|supper|coffee|tea|meeting|meet|call|class|exam|flight|train|appointment|appt|date|party|workout|gym|movie|cinema|concert|show|interview|deadline|submit|pickup|dropoff|lesson|tutorial|lecture|doctor|dentist|haircut)\b/i.test(
+      text
+    ) ||
+    /(晚飯|晚餐|午餐|午飯|早餐|食飯|約會|會議|開會|上堂|考試|飛機|趕deadline|Deadline|返工|上班|見工|面試|睇醫生|剪頭髮)/i.test(
+      text
+    )
   );
 }
 
@@ -975,7 +1233,8 @@ function hasWhenHint(text: string): boolean {
   const t = text.toLowerCase();
   return (
     /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|next)\b/.test(t) ||
-    /\b(聽日|明天|今日|今天|今晚|後日|後天|下星期|下週|星期[一二三四五六日天])\b/.test(
+    // no \b around CJK — \b breaks Chinese matching
+    /(聽日|明天|今日|今天|今晚|後日|後天|下星期|下個星期|下週|下个星期|星期[一二三四五六日天]|週[一二三四五六日天]|礼拜[一二三四五六日天])/.test(
       text
     ) ||
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t) ||
@@ -989,7 +1248,24 @@ function hasWhenHint(text: string): boolean {
     /\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/.test(t) ||
     /\b\d{1,2}-\d{1,2}(?:-\d{2,4})?\b/.test(t) ||
     /\d{4}-\d{1,2}-\d{1,2}/.test(t) ||
-    /\d{4}\s*年/.test(text)
+    /\d{4}\s*年/.test(text) ||
+    /\d{1,2}\s*月\s*\d{1,2}\s*日/.test(text) ||
+    // “3點” / “三點半” style (common Cantonese / written Chinese)
+    /\d{1,2}\s*點/.test(text)
+  );
+}
+
+/** Explicit “put this on the calendar” intent (EN + CJK). */
+function hasScheduleMarkIntent(text: string): boolean {
+  const t = text.toLowerCase();
+  if (
+    /\b(mark|schedule|add|put|remember|remind|save|plan|book|set)\b/.test(t)
+  ) {
+    return true;
+  }
+  // Chinese: 記低 / 幫我記 / 加入日曆 / 寫低 / 提醒我 …
+  return /(記低|記住|記住|寫低|寫下|標低|標記|加入日曆|加到日曆|加落日曆|放落日曆|放上日曆|記喺日曆|提醒我|提我|安排|約咗|約了)/.test(
+    text
   );
 }
 
@@ -997,19 +1273,20 @@ function hasWhenHint(text: string): boolean {
 export function looksLikeScheduleRequest(text: string): boolean {
   const t = text.toLowerCase().trim();
   if (!t) return false;
-  // Explicit mark / schedule language
-  if (
-    /\b(mark|schedule|add|put|remember|remind|save|plan|book|set)\b/.test(t) &&
-    (/\b(calendar|schedule|plan|agenda|tomorrow|today|tmr|tmrw|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(
-      t
-    ) ||
-      /\b(會議|約會|calendar|日曆|記|提醒|聽日|明天|今日)\b/i.test(text) ||
+  // Explicit mark / schedule language (EN mark + time/calendar, or CJK 記低…)
+  if (hasScheduleMarkIntent(text)) {
+    if (
+      hasWhenHint(text) ||
+      hasPlanActivity(text) ||
+      /\b(calendar|schedule|plan|agenda)\b/.test(t) ||
+      /(日曆|行程|schedule|calendar)/i.test(text) ||
       /\d{4}-\d{1,2}-\d{1,2}/.test(t) ||
-      /\d{1,2}\/\d{1,2}/.test(t))
-  ) {
-    return true;
+      /\d{1,2}\/\d{1,2}/.test(t)
+    ) {
+      return true;
+    }
   }
-  // Casual: “Tmr 8pm dinner at Mongkok” / “23/7 dinner 21:00”
+  // Casual: “Tmr 8pm dinner at Mongkok” / “23/7 dinner 21:00” / “聽日3點開會”
   if (hasPlanActivity(text) && hasWhenHint(text)) return true;
   // Time + place-ish (at X / 喺)
   if (
@@ -1022,9 +1299,10 @@ export function looksLikeScheduleRequest(text: string): boolean {
   // Event flyer / race paste (Chinese or English)
   if (looksLikeEventFlyer(text)) return true;
   if (
-    /\b(run|race|marathon|virtual|ust|gala|concert|tournament|賽事|馬拉松)\b/i.test(
+    (/\b(run|race|marathon|virtual|ust|gala|concert|tournament)\b/i.test(
       text
-    ) &&
+    ) ||
+      /(賽事|馬拉松|虛擬跑|長跑)/.test(text)) &&
     (/\d{4}/.test(text) || /年/.test(text))
   ) {
     return true;
@@ -1133,13 +1411,17 @@ export function fallbackEventsFromUserRequest(
     endDate = allDates[allDates.length - 1];
   } else if (allDates.length === 1) {
     date = allDates[0];
-  } else if (/\b(today|tonight|今日|今天|今晚)\b/i.test(userText)) {
+  } else if (/\b(today|tonight)\b/i.test(userText) || /(今日|今天|今晚)/.test(userText)) {
     date = today;
   } else if (
-    /\b(tomorrow|tmr|tmrw|tmrw\.|tmr\.|聽日|明天|翌日)\b/i.test(userText)
+    /\b(tomorrow|tmr|tmrw|tmrw\.|tmr\.)\b/i.test(userText) ||
+    /(聽日|明天|翌日)/.test(userText)
   ) {
     date = addDaysYmd(today, 1);
-  } else if (/\b(day after tomorrow|後日|後天)\b/i.test(userText)) {
+  } else if (
+    /\b(day after tomorrow)\b/i.test(userText) ||
+    /(後日|後天)/.test(userText)
+  ) {
     date = addDaysYmd(today, 2);
   } else {
     // D/M or M/D (HK Bunnies usually use day/month, e.g. 23/7)
@@ -1179,21 +1461,44 @@ export function fallbackEventsFromUserRequest(
         "friday",
         "saturday",
       ];
+      let matchedWeekday = false;
       for (let i = 0; i < days.length; i++) {
         if (new RegExp(`\\b${days[i]}\\b`, "i").test(lower)) {
           date = nextWeekdayYmd(today, i);
+          matchedWeekday = true;
           break;
+        }
+      }
+      // 星期一…日 / 週一…日 (0=Sun in JS Date)
+      if (!matchedWeekday) {
+        const cnWd = userText.match(
+          /(?:星期|週|周|礼拜)([一二三四五六日天])/
+        );
+        if (cnWd) {
+          const map: Record<string, number> = {
+            日: 0,
+            天: 0,
+            一: 1,
+            二: 2,
+            三: 3,
+            四: 4,
+            五: 5,
+            六: 6,
+          };
+          const wd = map[cnWd[1]];
+          if (wd !== undefined) date = nextWeekdayYmd(today, wd);
         }
       }
     }
   }
 
-  // Time: 21:00 | 9:30pm | 800pm | 8pm
+  // Time: 21:00 | 9:30pm | 800pm | 8pm | 3點 | 3點半
   let time: string | undefined;
   const t24 = userText.match(/\b(\d{1,2}):(\d{2})\b/);
   const t12colon = userText.match(/\b(\d{1,2}):(\d{2})\s*(am|pm)\b/i);
   const t12 = userText.match(/\b(\d{1,2})\s*(am|pm)\b/i);
   const tCompact = userText.match(/\b(\d{3,4})\s*(am|pm)\b/i); // 800pm → 8:00 pm
+  const tCn = userText.match(/(\d{1,2})\s*點\s*(半|(\d{1,2})\s*分?)?/);
   if (t12colon) {
     let h = parseInt(t12colon[1], 10) % 12;
     if (t12colon[3].toLowerCase() === "pm") h += 12;
@@ -1220,6 +1525,12 @@ export function fallbackEventsFromUserRequest(
     let h = parseInt(t12[1], 10) % 12;
     if (t12[2].toLowerCase() === "pm") h += 12;
     time = `${String(h).padStart(2, "0")}:00`;
+  } else if (tCn) {
+    const h = Math.min(23, parseInt(tCn[1], 10));
+    let m = 0;
+    if (tCn[2] === "半") m = 30;
+    else if (tCn[3]) m = Math.min(59, parseInt(tCn[3], 10));
+    time = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
   } else {
     // Military 2100 / 0930 (avoid matching years 2026)
     const mil = userText.match(/\b([01]?\d|2[0-3])([0-5]\d)\b/);
@@ -1263,9 +1574,10 @@ export function fallbackEventsFromUserRequest(
   for (const line of lines) {
     if (skipTitleLine(line)) continue;
     if (
-      /\b(run|race|marathon|virtual|ust|gala|concert|tournament|賽事|馬拉松|show|festival)\b/i.test(
+      (/\b(run|race|marathon|virtual|ust|gala|concert|tournament|show|festival)\b/i.test(
         line
       ) ||
+        /(賽事|馬拉松)/.test(line)) ||
       /[A-Za-z]+[_-]?\d+/i.test(line) ||
       /_[A-Z0-9]+/i.test(line)
     ) {
@@ -1291,11 +1603,15 @@ export function fallbackEventsFromUserRequest(
         /\b(please|pls|can you|could you|mark|schedule|add|put|remember|remind|save|plan|book|set|on|the|my|a|an|to|for|calendar|agenda|event\s*date)\b/gi,
         " "
       )
-      .replace(/賽事日期|活動日期/g, " ")
       .replace(
-        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|聽日|明天|今日|今天|今晚|後日|後天)\b/gi,
+        /賽事日期|活動日期|記低|記住|寫低|寫下|標低|標記|加入日曆|加到日曆|加落日曆|放落日曆|放上日曆|提醒我|提我|幫我|请|請/g,
         " "
       )
+      .replace(
+        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.)\b/gi,
+        " "
+      )
+      .replace(/(聽日|明天|今日|今天|今晚|後日|後天|翌日)/g, " ")
       .replace(/\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/g, " ")
       .replace(
         /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b/gi,
@@ -1328,7 +1644,7 @@ export function fallbackEventsFromUserRequest(
   if (!title || title.length < 2) title = "Event";
   if (title.length > 72) title = title.slice(0, 72).trim();
 
-  const category = looksLikeWork(title) ? "work" : "other";
+  const category = looksLikeWork(title) ? "work" : "event";
   const note =
     endDate && endDate !== date
       ? `Until ${endDate}`
@@ -1368,8 +1684,10 @@ export function formatMarkedSummary(
         range = `${startLabel} – ${endLabel}`;
       }
       const cat = eventCategory(e as ScheduleEvent);
-      const tag = cat === "work" ? "💼 work" : "📅 other";
-      return `${e.time ? e.time + " " : ""}${e.title} (${range} · ${tag})`;
+      const meta = CATEGORY_META[cat];
+      const tag = `${meta.emoji} ${meta.label}`;
+      const tr = formatTimeRange(e.time, e.endTime);
+      return `${tr ? tr + " " : ""}${e.title} (${range} · ${tag})`;
     } catch {
       return e.title;
     }
@@ -1388,7 +1706,8 @@ export function formatUpdatedSummary(events: ScheduleEvent[]): string {
         day: "numeric",
       });
       const cat = eventCategory(e);
-      const tag = cat === "work" ? "💼 work · 3h remind" : "📅 other · 1h remind";
+      const meta = CATEGORY_META[cat];
+      const tag = `${meta.emoji} ${meta.label} · ${meta.leadHours}h remind`;
       return `${e.time ? e.time + " " : ""}${e.title} → ${tag} (${label})`;
     } catch {
       return e.title;
@@ -1451,6 +1770,35 @@ export function datesWithEvents(events: ScheduleEvent[]): Set<string> {
     for (const d of eachDateKey(e.date, e.endDate)) set.add(d);
   }
   return set;
+}
+
+/**
+ * Unique user-plan categories per date (skips default holiday marks).
+ * Used to paint emoji / tint on month grid cells.
+ */
+export function categoriesByDate(
+  events: ScheduleEvent[]
+): Map<string, ScheduleCategory[]> {
+  const map = new Map<string, ScheduleCategory[]>();
+  for (const e of events) {
+    if (e.id.startsWith("baa-default:")) continue;
+    const cat = eventCategory(e);
+    for (const d of eachDateKey(e.date, e.endDate)) {
+      const list = map.get(d) ?? [];
+      if (!list.includes(cat)) list.push(cat);
+      map.set(d, list);
+    }
+  }
+  return map;
+}
+
+/** Primary category for a day (first user event), for cell tint */
+export function primaryCategoryOnDate(
+  events: ScheduleEvent[],
+  date: string
+): ScheduleCategory | null {
+  const cats = categoriesByDate(events).get(date);
+  return cats?.[0] ?? null;
 }
 
 export function monthLabel(year: number, month: number) {

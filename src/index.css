@@ -125,10 +125,10 @@ textarea {
 }
 
 .mac-window-root {
-  background: transparent;
+  background: transparent !important;
   overflow: hidden;
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   justify-content: center;
 }
 
@@ -626,6 +626,19 @@ textarea {
   border-radius: 99px;
 }
 
+/* iPhone Alarm–style time wheels (Add plan) */
+.ios-time-wheel {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+.ios-time-wheel::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 /* ── Panel open/close — same smooth feel as the function list ── */
 :root {
   --panel-anim-ms: 320ms;
@@ -949,8 +962,8 @@ textarea {
   transform-origin: 0% 50%;
 }
 .care-wa-strip .care-wa-bubble {
-  /* Hug text when short; still expand for long weather lines */
-  width: fit-content;
+  /* Prefer full strip width so sync status isn’t half-cut */
+  width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;

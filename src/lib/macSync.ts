@@ -15,8 +15,9 @@ export async function publishScheduleToCompanion(
           date: String(e.date),
           title: String(e.title),
           time: e.time ? String(e.time) : null,
+          endTime: e.endTime ? String(e.endTime) : null,
           note: e.note ? String(e.note) : null,
-          category: e.category === "work" ? "work" : "other",
+          category: e.category ?? "event",
           createdAt: Number(e.createdAt) || Date.now(),
         })),
       }
@@ -62,7 +63,7 @@ export function buildSampleWeek(): ScheduleEvent[] {
       date: day(2),
       title: "Dentist",
       time: "16:00",
-      category: "other",
+      category: "event",
       createdAt: now,
     },
     {
@@ -78,7 +79,7 @@ export function buildSampleWeek(): ScheduleEvent[] {
       date: day(6),
       title: "Weekend hangout",
       time: "15:00",
-      category: "other",
+      category: "friends",
       createdAt: now,
     },
   ];

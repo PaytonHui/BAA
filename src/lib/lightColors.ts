@@ -21,7 +21,7 @@ export interface LightColorOption {
 }
 
 /**
- * Real lightstick LED hues sampled from AirDropped photos
+ * Real lightstick LED hues sampled from reference photos
  * (IMG_7285–7290 · green, purple, blue, orange, yellow, white).
  */
 export const LIGHT_HEX = {

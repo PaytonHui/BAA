@@ -19,7 +19,6 @@ interface ContextMenuProps {
   onToggleMute: () => void;
   onSettings: () => void;
   onSyncCalendar: () => void;
-  onAirDropCalendar: () => void;
   onHide: () => void;
   onQuit: () => void;
   onExited?: () => void;
@@ -45,7 +44,6 @@ export function ContextMenu({
   onToggleMute,
   onSettings,
   onSyncCalendar,
-  onAirDropCalendar,
   onHide,
   onQuit,
   onExited,
@@ -129,7 +127,6 @@ export function ContextMenu({
       )}
       <div className="my-0.5 mx-3.5 h-px bg-black/[0.08]" />
       <MenuItem label="Sync to Calendar" onClick={onSyncCalendar} />
-      <MenuItem label="AirDrop calendar" onClick={onAirDropCalendar} />
       <div className="my-0.5 mx-3.5 h-px bg-black/[0.08]" />
       <MenuItem label="Pause BAA" onClick={onHide} />
       <MenuItem label="Quit BAA" danger onClick={onQuit} />

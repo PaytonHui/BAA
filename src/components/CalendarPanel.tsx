@@ -1,10 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { calendarDayMark } from "../lib/defaultCalendar";
+import { IosTimePicker } from "./IosTimePicker";
+import { resizeCalendarForComposer } from "../lib/panelWindow";
 import {
+  CATEGORY_META,
+  SCHEDULE_CATEGORIES,
+  addMinutesToHhmm,
   buildMonthGrid,
-  datesWithEvents,
+  categoriesByDate,
   eventCategory,
   eventsOnDate,
+  formatTimeRange,
+  hhmmToMinutes,
   monthLabel,
   toDateKey,
   todayKey,
@@ -16,6 +23,7 @@ export type ManualScheduleInput = {
   date: string;
   title: string;
   time?: string;
+  endTime?: string;
   note?: string;
   category: ScheduleCategory;
 };
@@ -30,12 +38,26 @@ interface CalendarPanelProps {
   /** Show “+ Add plan” composer for manual schedule create */
   allowManualCreate?: boolean;
   onAdd?: (input: ManualScheduleInput) => void;
+  /** Update an existing plan (edit from context menu) */
+  onUpdate?: (id: string, input: ManualScheduleInput) => void;
 }
 
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 
+function defaultHalfHourTime(): string {
+  const n = new Date();
+  let h = n.getHours();
+  let m = n.getMinutes();
+  if (m < 30) m = 30;
+  else {
+    m = 0;
+    h = (h + 1) % 24;
+  }
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
 /**
- * Phoning-style calendar — view day plans + optional manual add.
+ * Phoning-style calendar — view day plans + optional manual add / edit.
  */
 export function CalendarPanel({
   open: _open,
@@ -46,52 +68,206 @@ export function CalendarPanel({
   onClose,
   allowManualCreate = false,
   onAdd,
+  onUpdate,
 }: CalendarPanelProps) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [selected, setSelected] = useState(todayKey());
   const [title, setTitle] = useState("");
-  const [time, setTime] = useState("");
-  const [category, setCategory] = useState<ScheduleCategory>("other");
+  const [time, setTime] = useState(defaultHalfHourTime);
+  const [endTime, setEndTime] = useState(() =>
+    addMinutesToHhmm(defaultHalfHourTime(), 60)
+  );
+  /** Which wheel is active in the composer */
+  const [timeTab, setTimeTab] = useState<"start" | "end">("start");
+  const [category, setCategory] = useState<ScheduleCategory>("event");
   const [formError, setFormError] = useState<string | null>(null);
-  /** Free tier: collapsed “+ Add plan” until user opens the form */
   const [addOpen, setAddOpen] = useState(false);
+  /** When set, form is editing this event id */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  /** Right-click menu on a plan bubble */
+  const [ctxMenu, setCtxMenu] = useState<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  /** Outer card — measure real height so OS window has no white under-strip */
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  // Keep form date in sync with the selected day
   useEffect(() => {
     setFormError(null);
   }, [selected]);
 
-  const marked = useMemo(() => datesWithEvents(events), [events]);
+  // Size OS window to the measured card (not a fixed oversized height)
+  useEffect(() => {
+    const el = panelRef.current;
+    const apply = () => {
+      const h = el?.getBoundingClientRect().height;
+      void resizeCalendarForComposer(addOpen, large, h).catch(() => undefined);
+    };
+    apply();
+    // After layout / time-wheel paint
+    const t1 = window.setTimeout(apply, 50);
+    const t2 = window.setTimeout(apply, 200);
+    let ro: ResizeObserver | null = null;
+    if (el && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => apply());
+      ro.observe(el);
+    }
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+      ro?.disconnect();
+    };
+  }, [addOpen, large]);
+
+  // Tell parent whether composer is open (via custom event — no prop drill)
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("baa-cal-form-open", { detail: { open: addOpen } })
+    );
+  }, [addOpen]);
+
+  // Close context menu on outside click / escape
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [ctxMenu]);
+
+  const catsByDate = useMemo(() => categoriesByDate(events), [events]);
   const grid = useMemo(() => buildMonthGrid(year, month), [year, month]);
   const dayEvents = useMemo(
     () => eventsOnDate(events, selected),
     [events, selected]
   );
 
-  const submitManual = (e?: React.FormEvent) => {
+  const resetForm = (keepTime = true) => {
+    setTitle("");
+    if (!keepTime) {
+      const start = defaultHalfHourTime();
+      setTime(start);
+      setEndTime(addMinutesToHhmm(start, 60));
+    }
+    setTimeTab("start");
+    setCategory("event");
+    setFormError(null);
+    setEditingId(null);
+  };
+
+  const openAdd = () => {
+    const start = defaultHalfHourTime();
+    setTitle("");
+    setTime(start);
+    setEndTime(addMinutesToHhmm(start, 60));
+    setTimeTab("start");
+    setCategory("event");
+    setEditingId(null);
+    setAddOpen(true);
+    setFormError(null);
+    setCtxMenu(null);
+  };
+
+  const openEdit = (ev: ScheduleEvent) => {
+    setSelected(ev.date);
+    setTitle(ev.title);
+    const start = ev.time?.trim() || "";
+    setTime(start);
+    setEndTime(
+      ev.endTime?.trim() ||
+        (start ? addMinutesToHhmm(start, 60) : "")
+    );
+    setTimeTab("start");
+    setCategory(eventCategory(ev));
+    setEditingId(ev.id);
+    setAddOpen(true);
+    setFormError(null);
+    setCtxMenu(null);
+    // Jump month to the event if needed
+    try {
+      const [y, m] = ev.date.split("-").map(Number);
+      setYear(y);
+      setMonth(m - 1);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const submitManual = (e?: React.FormEvent | React.MouseEvent) => {
     e?.preventDefault();
+    e?.stopPropagation();
     const t = title.trim();
     if (!t) {
       setFormError("Add a title");
       return;
     }
-    if (!onAdd) return;
-    onAdd({
+    const start = time.trim() || undefined;
+    let end = endTime.trim() || undefined;
+    // End without start → drop end; end before/equal start → reject
+    if (end && !start) end = undefined;
+    if (start && end) {
+      const a = hhmmToMinutes(start);
+      const b = hhmmToMinutes(end);
+      if (a != null && b != null && b <= a) {
+        setFormError("End time must be after start time");
+        setTimeTab("end");
+        return;
+      }
+    }
+    const payload: ManualScheduleInput = {
       date: selected,
       title: t,
-      time: time.trim() || undefined,
+      time: start,
+      endTime: end,
       category,
-    });
-    setTitle("");
-    setTime("");
-    setCategory("other");
-    setFormError(null);
-    setAddOpen(false);
+    };
+    try {
+      if (editingId && onUpdate) {
+        onUpdate(editingId, payload);
+      } else if (onAdd) {
+        onAdd(payload);
+      } else {
+        setFormError("Add plan is unavailable — reopen Calendar");
+        return;
+      }
+      resetForm(true);
+      setAddOpen(false);
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : "Could not save plan"
+      );
+    }
   };
 
-  // Parent keeps us mounted during exit anim; `open` only gates interaction if needed
+  const onStartTimeChange = (hhmm: string) => {
+    setTime(hhmm);
+    setFormError(null);
+    if (!hhmm) {
+      // All-day: clear end as well
+      setEndTime("");
+      return;
+    }
+    // Keep a sensible end (at least 30m after start)
+    const startM = hhmmToMinutes(hhmm);
+    const endM = hhmmToMinutes(endTime);
+    if (startM != null && (endM == null || endM <= startM)) {
+      setEndTime(addMinutesToHhmm(hhmm, 60));
+    }
+  };
+
+  const onEndTimeChange = (hhmm: string) => {
+    setEndTime(hhmm);
+    setFormError(null);
+  };
 
   const prevMonth = () => {
     if (month === 0) {
@@ -119,22 +295,28 @@ export function CalendarPanel({
     }
   })();
 
+  // Always height:auto so the card hugs content — never stretch white into empty OS chrome
   const panelW = large ? "w-[360px]" : "w-[280px]";
-  // Slightly taller only when the add form is expanded
-  const formExpanded = allowManualCreate && addOpen;
-  const panelH = large
-    ? formExpanded
-      ? "h-[min(500px,100%)] max-h-full"
-      : "h-[min(460px,100%)] max-h-full"
-    : formExpanded
-      ? "h-[min(380px,100%)] max-h-full"
-      : "h-[min(340px,100%)] max-h-full";
-  const dayH = large ? "h-9" : "h-6";
+  // Slightly tighter grid when form is open so composer has room
+  const dayH = addOpen
+    ? large
+      ? "h-7"
+      : "h-6"
+    : large
+      ? "h-11"
+      : "h-8";
   const dayText = large ? "text-[12px]" : "text-[10px]";
 
   return (
     <div
-      className={`panel-surface relative ${panelW} max-w-full ${panelH} flex flex-col rounded-[26px] overflow-hidden shadow-none border-0 bg-[#F7F7F8]`}
+      ref={panelRef}
+      className={`panel-surface relative ${panelW} max-w-full h-auto flex flex-col rounded-[26px] overflow-hidden shadow-none border-0 bg-[#F7F7F8]`}
+      onContextMenu={(e) => {
+        // Block WKWebView “Reload” menu on empty chrome; event cards handle their own
+        if (!(e.target as HTMLElement).closest?.("[data-plan-card]")) {
+          e.preventDefault();
+        }
+      }}
     >
       {/* —— Same top bar as chat —— */}
       <header className="shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 bg-white/90 border-b border-black/[0.06] backdrop-blur-sm">
@@ -154,9 +336,7 @@ export function CalendarPanel({
             className="w-9 h-9 rounded-full object-cover object-[center_70%] ring-1 ring-black/5 bg-[#B8E6FF]"
             draggable={false}
           />
-          <span
-            className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-white"
-          />
+          <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-white" />
         </div>
 
         <div className="min-w-0 flex-1">
@@ -234,7 +414,9 @@ export function CalendarPanel({
             const key = toDateKey(year, month, day);
             const isToday = key === todayKey();
             const isSel = key === selected;
-            const has = marked.has(key);
+            const dayCats = catsByDate.get(key) ?? [];
+            const primary = dayCats[0];
+            const primaryMeta = primary ? CATEGORY_META[primary] : null;
             // Member heart / Debut gradient heart / user bunny replace day number
             const dayMark = calendarDayMark(year, month, day);
             return (
@@ -245,14 +427,18 @@ export function CalendarPanel({
                 title={
                   dayMark
                     ? `${day} · ${dayMark.label}`
-                    : undefined
+                    : dayCats.length
+                      ? `${day} · ${dayCats.map((c) => CATEGORY_META[c].emoji + " " + CATEGORY_META[c].label).join(", ")}`
+                      : undefined
                 }
-                className={`relative ${dayH} rounded-md ${dayText} font-semibold transition border flex items-center justify-center ${
+                className={`relative ${dayH} rounded-md ${dayText} font-semibold transition border flex flex-col items-center justify-center gap-0 leading-none ${
                   isSel
                     ? "bg-[#B8EF9A] border-neutral-800/80 text-neutral-900 shadow-sm"
-                    : isToday
-                      ? "bg-white border-neutral-300 text-neutral-900"
-                      : "bg-white/70 border-transparent hover:border-neutral-200 text-neutral-700"
+                    : primaryMeta
+                      ? `${primaryMeta.dayBg} border-transparent ${primaryMeta.dayText} hover:brightness-[0.98]`
+                      : isToday
+                        ? "bg-white border-neutral-300 text-neutral-900"
+                        : "bg-white/70 border-transparent hover:border-neutral-200 text-neutral-700"
                 }`}
               >
                 {dayMark?.kind === "nj-debut-heart" ? (
@@ -261,7 +447,6 @@ export function CalendarPanel({
                     aria-label={`Day ${day}, NewJeans Debut Day`}
                     role="img"
                   >
-                    {/* 5 NJ lightstick colors as a banded heart */}
                     <svg viewBox="0 0 16 16" aria-hidden>
                       <defs>
                         <linearGradient
@@ -297,25 +482,49 @@ export function CalendarPanel({
                     {dayMark.value}
                   </span>
                 ) : (
-                  day
+                  <span className="leading-none">{day}</span>
                 )}
-                {has && !dayMark && (
+                {/* Type emoji(s) under the date number */}
+                {dayCats.length > 0 && !dayMark && (
                   <span
-                    className={`absolute bottom-px left-1/2 -translate-x-1/2 w-1 h-1 rounded-full ${
-                      isSel ? "bg-neutral-800" : "bg-[#5B8DEF]"
+                    className={`flex items-center justify-center gap-px leading-none ${
+                      large ? "text-[9px] mt-0.5" : "text-[7px] -mt-px"
                     }`}
-                  />
+                    aria-hidden
+                  >
+                    {dayCats.slice(0, 3).map((c) => (
+                      <span key={c}>{CATEGORY_META[c].emoji}</span>
+                    ))}
+                  </span>
                 )}
               </button>
             );
           })}
         </div>
+        {/* Tiny legend — hide while composing to save vertical space */}
+        {!addOpen && (
+          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 px-0.5 pt-1 pb-0.5">
+            {SCHEDULE_CATEGORIES.map((c) => (
+              <span
+                key={c}
+                className="text-[8px] font-medium text-neutral-500 tabular-nums"
+              >
+                {CATEGORY_META[c].emoji} {CATEGORY_META[c].label}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Day events list */}
+      {/* Day events list — hidden while composing so form shows fully */}
+      {!addOpen && (
       <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 space-y-2 chat-scroll bg-[#F7F7F8]">
         <p className="text-[10px] font-semibold text-neutral-500 px-0.5">
           {selectedLabel}
+          <span className="font-normal text-neutral-400">
+            {" "}
+            · right-click a plan to edit
+          </span>
         </p>
 
         {dayEvents.length === 0 ? (
@@ -336,82 +545,147 @@ export function CalendarPanel({
             </div>
           </div>
         ) : (
-          dayEvents.map((ev, idx) => (
-            <div key={ev.id} className="flex items-start gap-1.5 pr-1">
-              <div className="w-8 shrink-0 pt-0.5">
-                {idx === 0 ? (
-                  <img
-                    src="/avatars/lightstick-icon.png?v=classic-face"
-                    alt=""
-                    className="w-8 h-8 rounded-full object-cover object-[center_70%] ring-1 ring-black/5 bg-[#B8E6FF]"
-                    draggable={false}
-                  />
-                ) : (
-                  <div className="w-8 h-8" />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                {idx === 0 && (
-                  <p className="text-[11px] font-semibold text-neutral-700 mb-0.5 ml-0.5">
-                    Binky
-                  </p>
-                )}
-                <div className="flex items-end gap-1">
-                  <div className="max-w-[90%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-                    <div className="flex items-center gap-1 flex-wrap">
-                      {ev.time && (
-                        <span className="font-bold text-neutral-700">
-                          {ev.time}
+          dayEvents.map((ev, idx) => {
+            const cat = eventCategory(ev);
+            const meta = CATEGORY_META[cat];
+            return (
+              <div key={ev.id} className="flex items-start gap-1.5 pr-1">
+                <div className="w-8 shrink-0 pt-0.5">
+                  {idx === 0 ? (
+                    <img
+                      src="/avatars/lightstick-icon.png?v=classic-face"
+                      alt=""
+                      className="w-8 h-8 rounded-full object-cover object-[center_70%] ring-1 ring-black/5 bg-[#B8E6FF]"
+                      draggable={false}
+                    />
+                  ) : (
+                    <div className="w-8 h-8" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  {idx === 0 && (
+                    <p className="text-[11px] font-semibold text-neutral-700 mb-0.5 ml-0.5">
+                      Binky
+                    </p>
+                  )}
+                  <div className="flex items-end gap-1">
+                    <div
+                      data-plan-card
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        // Position menu inside panel (avoid going off-screen)
+                        const rect = (
+                          e.currentTarget as HTMLElement
+                        ).getBoundingClientRect();
+                        setCtxMenu({
+                          id: ev.id,
+                          x: Math.min(
+                            e.clientX - rect.left + 8,
+                            rect.width - 120
+                          ),
+                          y: e.clientY - rect.top + 4,
+                        });
+                      }}
+                      onDoubleClick={() => openEdit(ev)}
+                      className="relative max-w-[90%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)] cursor-context-menu"
+                      title="Right-click to edit · double-click to edit"
+                    >
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {formatTimeRange(ev.time, ev.endTime) && (
+                          <span className="font-bold text-neutral-700">
+                            {formatTimeRange(ev.time, ev.endTime)}
+                          </span>
+                        )}
+                        {ev.endDate && ev.endDate !== ev.date && (
+                          <span className="text-[9px] font-semibold text-neutral-600">
+                            {ev.date.slice(5)} → {ev.endDate.slice(5)}
+                          </span>
+                        )}
+                        <span
+                          className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full border ${meta.chip}`}
+                        >
+                          {meta.emoji} {meta.label} · {meta.leadHours}h
                         </span>
+                      </div>
+                      {ev.title}
+                      {ev.note && (
+                        <p className="text-[10px] text-neutral-600 mt-0.5 opacity-90">
+                          {ev.note}
+                        </p>
                       )}
-                      {ev.endDate && ev.endDate !== ev.date && (
-                        <span className="text-[9px] font-semibold text-neutral-600">
-                          {ev.date.slice(5)} → {ev.endDate.slice(5)}
-                        </span>
+
+                      {/* Context menu anchored to this card */}
+                      {ctxMenu?.id === ev.id && (
+                        <div
+                          className="absolute z-50 min-w-[118px] rounded-xl border border-black/10 bg-white/95 backdrop-blur-md shadow-lg py-1 overflow-hidden"
+                          style={{
+                            left: Math.max(4, ctxMenu.x),
+                            top: Math.max(4, ctxMenu.y),
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          onContextMenu={(e) => e.preventDefault()}
+                        >
+                          <button
+                            type="button"
+                            className="w-full text-left px-3 py-1.5 text-[12px] font-semibold text-neutral-800 hover:bg-black/[0.05]"
+                            onClick={() => openEdit(ev)}
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full text-left px-3 py-1.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50"
+                            onClick={() => {
+                              onRemove(ev.id);
+                              setCtxMenu(null);
+                              if (editingId === ev.id) {
+                                resetForm();
+                                setAddOpen(false);
+                              }
+                            }}
+                          >
+                            🗑 Delete
+                          </button>
+                        </div>
                       )}
-                      <span
-                        className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${
-                          eventCategory(ev) === "work"
-                            ? "bg-sky-600/15 text-sky-800"
-                            : "bg-violet-600/12 text-violet-800"
-                        }`}
-                      >
-                        {eventCategory(ev) === "work"
-                          ? "💼 work · 3h"
-                          : "📅 other · 1h"}
-                      </span>
                     </div>
-                    {ev.title}
-                    {ev.note && (
-                      <p className="text-[10px] text-neutral-600 mt-0.5 opacity-90">
-                        {ev.note}
-                      </p>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => onRemove(ev.id)}
+                      className="shrink-0 mb-0.5 w-6 h-6 rounded-full border border-neutral-200 bg-white text-[10px] text-neutral-400 hover:text-rose-500 hover:border-rose-200"
+                      title="Delete"
+                    >
+                      ✕
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => onRemove(ev.id)}
-                    className="shrink-0 mb-0.5 w-6 h-6 rounded-full border border-neutral-200 bg-white text-[10px] text-neutral-400 hover:text-rose-500 hover:border-rose-200"
-                  >
-                    ✕
-                  </button>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
+      )}
 
-      {/* Free tier: one slim “+ Add plan” bar; expand only when needed */}
-      {allowManualCreate && onAdd && (
-        <div className="shrink-0 border-t border-black/[0.06] bg-white">
+      {/* Add / Edit plan — shrink-0 only (never flex-1 white stretch = bottom white bar) */}
+      {allowManualCreate && (onAdd || onUpdate) && (
+        <div
+          className="shrink-0 border-t border-black/[0.06] bg-white z-20"
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
           {!addOpen ? (
             <button
               type="button"
-              onClick={() => setAddOpen(true)}
-              className="w-full h-9 flex items-center justify-center gap-1.5 text-[12px] font-semibold text-[#007AFF] hover:bg-black/[0.03]"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                openAdd();
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+              className="w-full h-10 flex items-center justify-center gap-1.5 text-[13px] font-semibold text-[#007AFF] hover:bg-black/[0.03] active:bg-black/[0.06] cursor-pointer"
             >
-              <span className="text-[15px] leading-none" aria-hidden>
+              <span className="text-[16px] leading-none" aria-hidden>
                 +
               </span>
               Add plan
@@ -422,69 +696,147 @@ export function CalendarPanel({
           ) : (
             <form
               onSubmit={submitManual}
-              className="px-2.5 py-2 space-y-1.5"
+              className="shrink-0 px-2.5 py-2 space-y-1.5"
+              onPointerDown={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[10px] font-semibold text-neutral-600">
-                  New plan · {selectedLabel}
+                  {editingId ? "Edit plan" : "New plan"} · {selectedLabel}
                 </p>
                 <button
                   type="button"
                   onClick={() => {
                     setAddOpen(false);
-                    setFormError(null);
+                    resetForm(true);
                   }}
                   className="text-[10px] font-semibold text-neutral-400 hover:text-neutral-600 px-1"
                 >
                   Cancel
                 </button>
               </div>
-              <div className="flex gap-1.5 items-center">
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Title"
-                  autoFocus
-                  className="flex-1 min-w-0 h-8 rounded-full border border-neutral-200 bg-[#F7F7F8] px-3 text-[12px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-400 focus:bg-white"
-                />
-                <input
-                  type="time"
-                  value={time}
-                  onChange={(e) => setTime(e.target.value)}
-                  className="shrink-0 h-8 w-[6.5rem] rounded-full border border-neutral-200 bg-[#F7F7F8] px-1.5 text-[11px] text-neutral-800 outline-none focus:border-neutral-400"
-                  aria-label="Time (optional)"
-                />
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Title (required)"
+                autoFocus
+                className="w-full h-9 rounded-full border border-neutral-200 bg-[#F7F7F8] px-3 text-[13px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-400 focus:bg-white"
+              />
+
+              {/* Start / End time tabs + one wheel (saves height) */}
+              <div className="flex rounded-full bg-[#F2F2F7] p-0.5 gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => setTimeTab("start")}
+                  className={`flex-1 h-7 rounded-full text-[11px] font-semibold transition ${
+                    timeTab === "start"
+                      ? "bg-white text-neutral-900 shadow-sm"
+                      : "text-neutral-500"
+                  }`}
+                >
+                  Start
+                  {time ? (
+                    <span className="ml-1 font-bold tabular-nums text-[10px]">
+                      {time}
+                    </span>
+                  ) : (
+                    <span className="ml-1 text-[10px] font-normal text-neutral-400">
+                      —
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!time) {
+                      // Need a start first
+                      setTimeTab("start");
+                      setFormError("Set start time first");
+                      return;
+                    }
+                    setFormError(null);
+                    setTimeTab("end");
+                    if (!endTime) setEndTime(addMinutesToHhmm(time, 60));
+                  }}
+                  className={`flex-1 h-7 rounded-full text-[11px] font-semibold transition ${
+                    timeTab === "end"
+                      ? "bg-white text-neutral-900 shadow-sm"
+                      : "text-neutral-500"
+                  }`}
+                >
+                  End
+                  {endTime ? (
+                    <span className="ml-1 font-bold tabular-nums text-[10px]">
+                      {endTime}
+                    </span>
+                  ) : (
+                    <span className="ml-1 text-[10px] font-normal text-neutral-400">
+                      —
+                    </span>
+                  )}
+                </button>
               </div>
+              {timeTab === "start" ? (
+                <IosTimePicker
+                  value={time}
+                  onChange={onStartTimeChange}
+                  compact
+                  onLabel="Start on"
+                  offLabel="No time"
+                  emptyDisplay="All day"
+                />
+              ) : (
+                <IosTimePicker
+                  value={endTime}
+                  onChange={onEndTimeChange}
+                  compact
+                  onLabel="End on"
+                  offLabel="No end"
+                  emptyDisplay="Open end"
+                />
+              )}
+              {time && endTime && (
+                <p className="text-center text-[11px] font-semibold text-neutral-600 tabular-nums">
+                  {formatTimeRange(time, endTime)}
+                </p>
+              )}
+
+              {/* Type: work / school / event / family / friends */}
+              <div className="grid grid-cols-5 gap-1">
+                {SCHEDULE_CATEGORIES.map((c) => {
+                  const meta = CATEGORY_META[c];
+                  const on = category === c;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCategory(c)}
+                      title={`${meta.label} · remind ${meta.leadHours}h before`}
+                      className={`h-9 rounded-xl text-[10px] font-semibold border cursor-pointer flex flex-col items-center justify-center leading-tight transition ${
+                        on
+                          ? meta.chip + " shadow-sm"
+                          : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
+                      }`}
+                    >
+                      <span className="text-[13px] leading-none">
+                        {meta.emoji}
+                      </span>
+                      <span className="text-[8px] mt-0.5 truncate max-w-full px-0.5">
+                        {meta.label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
               <div className="flex gap-1.5 items-center">
-                <button
-                  type="button"
-                  onClick={() => setCategory("other")}
-                  className={`flex-1 h-7 rounded-full text-[10px] font-semibold border ${
-                    category === "other"
-                      ? "bg-violet-600/12 text-violet-800 border-violet-300"
-                      : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
-                  }`}
-                >
-                  📅 other
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCategory("work")}
-                  className={`flex-1 h-7 rounded-full text-[10px] font-semibold border ${
-                    category === "work"
-                      ? "bg-sky-600/15 text-sky-800 border-sky-300"
-                      : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
-                  }`}
-                >
-                  💼 work
-                </button>
                 <button
                   type="submit"
+                  onClick={submitManual}
                   disabled={!title.trim()}
-                  className="shrink-0 h-7 px-3.5 rounded-full bg-neutral-900 hover:bg-neutral-800 disabled:opacity-35 text-white text-[11px] font-semibold"
+                  className="flex-1 h-8 rounded-full bg-neutral-900 hover:bg-neutral-800 disabled:opacity-35 text-white text-[12px] font-semibold cursor-pointer disabled:cursor-not-allowed"
                 >
-                  Save
+                  {editingId ? "Update" : "Save"}
                 </button>
               </div>
               {formError && (

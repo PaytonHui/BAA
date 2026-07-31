@@ -550,7 +550,6 @@ export default function App() {
   const openSettingsRef = useRef<() => void>(() => undefined);
   const openLoginRef = useRef<() => void>(() => undefined);
   const syncCalendarRef = useRef<() => void>(() => undefined);
-  const airDropRef = useRef<() => void>(() => undefined);
   const hideRef = useRef<() => void>(() => undefined);
   const quitRef = useRef<() => void>(() => undefined);
 
@@ -701,9 +700,6 @@ export default function App() {
           break;
         case "sync":
           void syncCalendarRef.current?.();
-          break;
-        case "airdrop":
-          void airDropRef.current?.();
           break;
         case "hide":
           void hideRef.current?.();
@@ -1229,7 +1225,7 @@ export default function App() {
             text: r.message,
             emoji: r.emoji,
             kind: "reminder",
-            category: r.event.category ?? "other",
+            category: r.event.category ?? "event",
             title: r.event.title,
           });
         }
@@ -1683,78 +1679,149 @@ export default function App() {
    * Same Apple ID → iPhone sees events under BAA (not Family).
    */
   const mapEventsForCal = (events: ScheduleEvent[]) =>
-    events.map((e) => ({
-      id: e.id,
-      date: e.date,
-      title: e.title,
-      time: e.time ?? null,
-      note: e.note ?? null,
-      category: e.category ?? null,
-    }));
+    events
+      // Skip decorative defaults (holidays / NJ days) — only user plans
+      .filter((e) => !String(e.id).startsWith("baa-default:"))
+      .map((e) => ({
+        id: e.id,
+        date: e.date,
+        title: e.title,
+        time: e.time ?? null,
+        endTime: e.endTime ?? null,
+        note: e.note ?? null,
+        category: e.category ?? null,
+        endDate: e.endDate ?? null,
+      }));
+
+  /**
+   * Sync / status messages beside Binky.
+   * Must expand the care strip first — otherwise the native window stays pet-only
+   * and long text is clipped (looks like “bubble can’t fully show”).
+   */
+  const flashStatusBubble = useCallback((text: string, ok: boolean) => {
+    // Prefer short, multi-line-friendly copy for the strip width
+    const short =
+      text.length > 110 ? `${text.slice(0, 107).trimEnd()}…` : text;
+    void (async () => {
+      try {
+        if (!careOpenRef.current) {
+          await expandForCare("right", petScaleRef.current);
+          careOpenRef.current = true;
+        }
+      } catch {
+        /* still try to show bubble */
+      }
+      setCareBubble({
+        text: short,
+        kind: "schedule",
+        emoji: ok ? "📅" : "⚠️",
+        side: "right",
+        visible: true,
+      });
+      if (ok) playNotice();
+      else playReminder();
+    })();
+    window.setTimeout(() => {
+      setCareBubble((prev) =>
+        prev && prev.text === short ? { ...prev, visible: false } : prev
+      );
+      window.setTimeout(() => {
+        setCareBubble((prev) =>
+          prev && prev.text === short ? null : prev
+        );
+        void collapseCareLayout();
+      }, 280);
+    }, ok ? 5200 : 6400);
+  }, [collapseCareLayout]);
+
+  // Status from Sync (menu → main)
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    void listen<{
+      kind?: string;
+      n?: string;
+      ok?: boolean;
+      message?: string;
+    }>("calendar-share-status", (ev) => {
+      const p = ev.payload;
+      if (!p) return;
+      if (p.ok === false) {
+        flashStatusBubble(
+          (p.message || "Sync failed").split("\n")[0]?.slice(0, 140) ||
+            "Sync failed",
+          false
+        );
+        return;
+      }
+      if (p.kind === "sync") {
+        flashStatusBubble(
+          (p.message || `Synced ${p.n || ""} events to Calendar “BAA”`).slice(
+            0,
+            160
+          ),
+          true
+        );
+      }
+    }).then((fn) => {
+      un = fn;
+    });
+    return () => un?.();
+  }, [flashStatusBubble]);
 
   const syncToAppleCalendar = useCallback(async () => {
     await collapseMenuIfOpen();
 
     // Always re-read disk — other windows (calendar) write there
     const events = await reloadScheduleFromDisk().catch(() => loadSchedule());
-    if (events.length === 0) {
+    const payload = mapEventsForCal(events);
+    if (payload.length === 0) {
       fireAnim("wake");
       setExpression("thinking");
+      flashStatusBubble("No plans yet — add some in Calendar first", false);
       window.setTimeout(() => setExpression("idle"), 1600);
       console.warn("[calendar] no events to sync");
       return;
     }
 
+    flashStatusBubble(`Syncing ${payload.length} plans to Calendar “BAA”…`, true);
     try {
-      const n = await invoke<number>("sync_apple_calendar", {
-        events: mapEventsForCal(events),
+      const msg = await invoke<string>("sync_apple_calendar", {
+        events: payload,
       });
-      console.log("[calendar] synced", n, "events → Apple Calendar “BAA”");
+      console.log("[calendar] sync", msg);
       fireAnim("color");
       setExpression("happy");
+      // Prefer short friendly line for bubble
+      const first = (msg.split("\n")[0] || msg).trim();
+      const short =
+        first.length > 100
+          ? first.slice(0, 97) + "…"
+          : first || `Synced ${payload.length} plans to “BAA”`;
+      flashStatusBubble(short, true);
       window.setTimeout(() => setExpression("idle"), 1400);
     } catch (e) {
       console.error("[calendar] sync failed", e);
+      const raw =
+        typeof e === "string"
+          ? e
+          : e instanceof Error
+            ? e.message
+            : String(e);
       setExpression("sad");
+      // Common: Automation / Calendars permission denied
+      const tip = /not authorized|not allowed|1002|(-1743)|privilege|permission/i.test(
+        raw
+      )
+        ? "Allow BAA in System Settings → Privacy → Automation + Calendars"
+        : raw.split("\n")[0]?.slice(0, 100) ||
+          "Sync failed — check Calendar permissions";
+      flashStatusBubble(tip, false);
       window.setTimeout(() => setExpression("idle"), 1600);
     }
-  }, [collapseMenuIfOpen, fireAnim]);
-
-  /**
-   * AirDrop calendar as BAA.ics (plus best-effort Mac Calendar “BAA” sync).
-   */
-  const airDropCalendar = useCallback(async () => {
-    await collapseMenuIfOpen();
-
-    const events = await reloadScheduleFromDisk().catch(() => loadSchedule());
-    if (events.length === 0) {
-      fireAnim("wake");
-      setExpression("thinking");
-      window.setTimeout(() => setExpression("idle"), 1600);
-      console.warn("[airdrop] no calendar events to send");
-      return;
-    }
-
-    try {
-      const msg = await invoke<string>("airdrop_baa_calendar", {
-        events: mapEventsForCal(events),
-      });
-      console.log("[airdrop]", msg);
-      fireAnim("color");
-      setExpression("happy");
-      window.setTimeout(() => setExpression("idle"), 1400);
-    } catch (e) {
-      console.error("[airdrop]", e);
-      setExpression("sad");
-      window.setTimeout(() => setExpression("idle"), 1600);
-    }
-  }, [collapseMenuIfOpen, fireAnim]);
+  }, [collapseMenuIfOpen, fireAnim, flashStatusBubble]);
 
   syncCalendarRef.current = () => {
     void syncToAppleCalendar();
-  };
-  airDropRef.current = () => {
-    void airDropCalendar();
   };
 
   const closeLinkPhone = useCallback(async () => {

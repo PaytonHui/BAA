@@ -22,6 +22,7 @@ import {
   formatUpdatedSummary,
   hydrateSchedule,
   loadSchedule,
+  fallbackEventsFromUserRequest,
   looksLikeScheduleRequest,
   reloadScheduleFromDisk,
   resolveScheduleEventsFromChat,
@@ -354,8 +355,8 @@ export default function ChatWindowApp() {
           `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
           `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
           `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
-          `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|other"}]\n` +
-          `For date RANGES set date=start and endDate=end. ` +
+          `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm start or omit","endTime":"HH:mm end or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|school|event|family|friends"}]\n` +
+          `For date RANGES set date=start and endDate=end. For time ranges set time=start and endTime=end. ` +
           `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}].` +
           (upcoming
             ? ` Already saved:\n${upcoming}`
@@ -414,8 +415,15 @@ export default function ChatWindowApp() {
         newEv = !cancels.length
           ? resolveScheduleEventsFromChat(text, extracted.events, todayKey())
           : extracted.events;
+        // Last resort: Grok forgot SCHEDULE_JSON and resolver returned empty
+        if (!cancels.length && !newEv.length && wantSchedule) {
+          newEv = fallbackEventsFromUserRequest(text, todayKey());
+        }
       } catch {
         display = rawReply;
+        if (wantSchedule) {
+          newEv = fallbackEventsFromUserRequest(text, todayKey());
+        }
       }
 
       // Optimistic local mark (memory + localStorage) so calendar UI can refresh
@@ -435,7 +443,7 @@ export default function ChatWindowApp() {
           }
         } else if (wantSchedule) {
           quickNote =
-            "⚠️ Couldn’t parse a plan from that. Try: “dinner tomorrow 8pm”.";
+            "⚠️ Couldn’t parse a plan from that. Try: “聽日3點開會” or “dinner tomorrow 8pm”.";
         }
       } catch {
         /* ignore optimistic mark errors */
@@ -505,13 +513,34 @@ export default function ChatWindowApp() {
       ) {
         setAuth((a) => (a ? { ...a, loggedIn: false } : a));
       }
+      // Even if Grok fails, still try offline calendar mark from user text
+      let offlineNote = "";
+      try {
+        if (looksLikeScheduleRequest(text)) {
+          const offline = fallbackEventsFromUserRequest(text, todayKey());
+          if (offline.length) {
+            const prev = loadSchedule();
+            const { next, added, updated } = applyScheduleUpserts(prev, offline);
+            if (added.length || updated.length) {
+              saveSchedule(next);
+              void emit("schedule-updated", {}).catch(() => undefined);
+              void upsertScheduleEvents(offline).catch(() => undefined);
+              offlineNote = added.length
+                ? `\n\n${formatMarkedSummary(added)}`
+                : `\n\n${formatUpdatedSummary(updated)}`;
+            }
+          }
+        }
+      } catch {
+        /* ignore */
+      }
       setError(msg);
       setMessages((prev) => [
         ...prev,
         {
           id: id(),
           role: "assistant",
-          content: `⚠️ ${msg}`,
+          content: `⚠️ ${msg}${offlineNote}`,
           at: Date.now(),
           kind: "text",
         },
@@ -642,7 +671,7 @@ export default function ChatWindowApp() {
             </div>
             <p className="text-[12px] text-[#636366] leading-snug">
               Chat with Binky as your AI assistant is on the way. For now, use
-              the calendar — add plans yourself and AirDrop / sync.
+              the calendar — add plans yourself and Sync to Calendar.
             </p>
             <button
               type="button"

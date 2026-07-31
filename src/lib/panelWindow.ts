@@ -15,9 +15,11 @@ import {
 } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
 import {
-  CAL_H,
-  CAL_LARGE_H,
+  CAL_FORM_H,
+  CAL_FORM_LARGE_H,
   CAL_LARGE_W,
+  CAL_VIEW_H,
+  CAL_VIEW_LARGE_H,
   CAL_W,
   CHAT_H,
   CHAT_LARGE_H,
@@ -101,7 +103,7 @@ const TITLES: Record<PanelKind, string> = {
   calendar: "BAA Calendar",
   color: "BAA Light color",
   settings: "BAA Settings",
-  link: "BAA AirDrop calendar",
+  link: "BAA Share calendar",
   login: "BAA · Grok login",
   menu: "BAA Menu",
 };
@@ -116,11 +118,10 @@ async function panelSize(
 ): Promise<{ w: number; h: number }> {
   switch (kind) {
     case "calendar":
+      // Default browse height; form-open grows further via resizeCalendarForComposer
       return withShadowPad(
         large ? CAL_LARGE_W : CAL_W,
-        large
-          ? Math.min(CAL_LARGE_H - PET_H + 40, 520)
-          : Math.min(CAL_H - PET_H + 40, 400)
+        large ? CAL_VIEW_LARGE_H : CAL_VIEW_H
       );
     case "chat":
       // Tall enough for the Grok upgrade / login sheet (not just chat bubbles)
@@ -155,7 +156,10 @@ async function positionNearPet(
   tw: number,
   th: number
 ): Promise<{ x: number; y: number }> {
-  const main = getCurrentWindow();
+  // Always anchor to the pet (main) window — never the panel webview itself
+  const wins = await getAllWindows();
+  const main =
+    wins.find((w) => w.label === "main") ?? getCurrentWindow();
   const factor = await main.scaleFactor();
   const pos = await main.outerPosition();
   const size = await main.outerSize();
@@ -294,11 +298,22 @@ export async function showPanelWindow(
       await existing.setIgnoreCursorEvents(false);
       await existing.setAlwaysOnTop(true);
       await existing.setVisibleOnAllWorkspaces(true);
+      // Re-apply size after show — kills white strip under transparent panels
+      await existing.setSize(new LogicalSize(w, h));
+      await existing.setPosition(new LogicalPosition(x, y));
     } catch {
       /* ignore */
     }
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
     await emit(shown, { large });
+    // Late resize after enter animation starts (transparent webview paint)
+    window.setTimeout(() => {
+      void existing.setSize(new LogicalSize(w, h)).catch(() => undefined);
+      void existing.setIgnoreCursorEvents(false).catch(() => undefined);
+    }, 80);
+    window.setTimeout(() => {
+      void existing.setSize(new LogicalSize(w, h)).catch(() => undefined);
+    }, 280);
     try {
       await existing.setFocus();
     } catch {
@@ -349,6 +364,8 @@ export async function showPanelWindow(
     await win.setIgnoreCursorEvents(false);
     await win.setAlwaysOnTop(true);
     await win.setVisibleOnAllWorkspaces(true);
+    // Re-assert size after show (macOS transparent webview quirk)
+    await win.setSize(new LogicalSize(w, h));
   } catch {
     /* best-effort show */
   }
@@ -356,6 +373,13 @@ export async function showPanelWindow(
   // Give the webview a moment to mount listeners, then fire ONE enter
   await new Promise<void>((r) => window.setTimeout(r, 50));
   await emit(shown, { large });
+  window.setTimeout(() => {
+    void win.setSize(new LogicalSize(w, h)).catch(() => undefined);
+    void win.setIgnoreCursorEvents(false).catch(() => undefined);
+  }, 80);
+  window.setTimeout(() => {
+    void win.setSize(new LogicalSize(w, h)).catch(() => undefined);
+  }, 280);
   try {
     await win.setFocus();
   } catch {
@@ -436,4 +460,60 @@ export async function resizePanelWindow(
   await win.setSize(new LogicalSize(w, h));
   await win.setPosition(new LogicalPosition(x, y));
   await emit(`${kind}-window-size`, { large });
+}
+
+/**
+ * Grow / shrink the calendar window so the Add plan composer fits fully.
+ * Pass `contentHeight` from a measured card (ResizeObserver) to avoid white gap.
+ */
+export async function resizeCalendarForComposer(
+  formOpen: boolean,
+  large: boolean,
+  contentHeight?: number
+): Promise<void> {
+  const fallback = formOpen
+    ? large
+      ? CAL_FORM_LARGE_H
+      : CAL_FORM_H
+    : large
+      ? CAL_VIEW_LARGE_H
+      : CAL_VIEW_H;
+  // Measured panel height + small breathing room (not a huge pad)
+  let contentH =
+    typeof contentHeight === "number" && contentHeight > 120
+      ? Math.ceil(contentHeight) + 4
+      : fallback;
+  // Clamp so we don't create a huge empty transparent window
+  const maxH = formOpen ? (large ? 720 : 640) : large ? 560 : 500;
+  const minH = formOpen ? 420 : 360;
+  contentH = Math.max(minH, Math.min(maxH, contentH));
+
+  const { w, h } = withShadowPad(large ? CAL_LARGE_W : CAL_W, contentH);
+  const apply = async (win: {
+    setSize: (s: LogicalSize) => Promise<void>;
+    setPosition: (p: LogicalPosition) => Promise<void>;
+    setIgnoreCursorEvents?: (v: boolean) => Promise<void>;
+  }) => {
+    const { x, y } = await positionNearPet(w, h);
+    await win.setSize(new LogicalSize(w, h));
+    await win.setPosition(new LogicalPosition(x, y));
+    // Force macOS transparent redraw (avoids white bar under the card)
+    try {
+      await win.setIgnoreCursorEvents?.(false);
+    } catch {
+      /* ignore */
+    }
+  };
+  try {
+    const self = getCurrentWindow();
+    if (self.label === LABELS.calendar) {
+      await apply(self);
+      return;
+    }
+  } catch {
+    /* fall through */
+  }
+  const win = await WebviewWindow.getByLabel(LABELS.calendar);
+  if (!win) return;
+  await apply(win);
 }

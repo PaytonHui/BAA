@@ -452,7 +452,7 @@ export function buildDefaultCalendarEvents(now = new Date()): ScheduleEvent[] {
         date: s.date,
         title: s.title,
         note: s.note,
-        category: "other",
+        category: "event",
         createdAt,
       });
     }

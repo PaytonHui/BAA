@@ -32,7 +32,7 @@ function nextDayYyyymmdd(d: string): string {
   return `${yy}${mm}${dd}`;
 }
 
-/** Build a .ics calendar file from BAA schedule (for AirDrop / import). */
+/** Build a .ics calendar file from BAA schedule (for export / import). */
 export function scheduleToIcs(events: ScheduleEvent[]): string {
   const lines: string[] = [
     "BEGIN:VCALENDAR",

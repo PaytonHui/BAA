@@ -13,7 +13,7 @@ interface LinkPhonePanelProps {
 }
 
 /**
- * Share calendar — Sync / AirDrop use disk schedule.
+ * Share calendar — Sync to Mac Apple Calendar “BAA”.
  */
 export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
   const [busy, setBusy] = useState(false);
@@ -38,32 +38,23 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
       time: e.time ?? null,
       note: e.note ?? null,
       category: e.category ?? null,
+      endDate: e.endDate ?? null,
     }));
 
-  const run = async (kind: "sync" | "airdrop") => {
+  const runSync = async () => {
     setBusy(true);
     setMsg(null);
     try {
-      // Fresh disk read so calendar window adds are included
       const list = await reloadScheduleFromDisk().catch(() => loadSchedule());
       setEvents(list);
       if (list.length === 0) {
         setMsg("No events yet — add some in Calendar first");
         return;
       }
-      if (kind === "sync") {
-        const n = await invoke<number>("sync_apple_calendar", {
-          events: payload(list),
-        });
-        setMsg(
-          `Synced ${n} to calendar “BAA”. On iPhone enable Calendars → BAA (not Family).`
-        );
-      } else {
-        const text = await invoke<string>("airdrop_baa_calendar", {
-          events: payload(list),
-        });
-        setMsg(text);
-      }
+      const text = await invoke<string>("sync_apple_calendar", {
+        events: payload(list),
+      });
+      setMsg(text);
     } catch (e) {
       const raw =
         typeof e === "string"
@@ -97,15 +88,8 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
         </button>
       </div>
       <p className="text-[12px] text-[#8E8E93] leading-snug">
-        Add plans in Calendar first, then share.
-      </p>
-      <p className="text-[13px] text-[#8E8E93] leading-snug">
-        <span className="font-semibold text-[#1C1C1E]">AirDrop</span> sends{" "}
-        <span className="font-semibold text-[#1C1C1E]">BAA.ics</span>. On
-        iPhone open it and choose calendar{" "}
-        <span className="font-semibold text-[#1C1C1E]">BAA</span> (not Family).{" "}
-        <span className="font-semibold text-[#1C1C1E]">Sync</span> writes
-        straight to Mac calendar BAA via iCloud.
+        Add plans in Calendar first, then sync to Mac calendar{" "}
+        <span className="font-semibold text-[#1C1C1E]">BAA</span>.
       </p>
       <p className="text-[13px] text-[#3A3A3C]">
         <span className="font-semibold text-[#007AFF]">{events.length}</span>{" "}
@@ -114,18 +98,10 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
       <button
         type="button"
         disabled={busy}
-        onClick={() => void run("sync")}
+        onClick={() => void runSync()}
         className="baa-ios-btn baa-ios-btn-primary w-full text-[14px] py-2.5 disabled:opacity-50"
       >
         {busy ? "Working…" : "Sync to Calendar “BAA”"}
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => void run("airdrop")}
-        className="baa-ios-btn baa-ios-btn-secondary w-full text-[14px] py-2.5 disabled:opacity-50"
-      >
-        {busy ? "Working…" : "AirDrop calendar"}
       </button>
       {msg && (
         <p className="text-[12px] text-[#8E8E93] leading-snug">{msg}</p>

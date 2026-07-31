@@ -24,7 +24,7 @@ Hey Bunnies 🐰 I made a little desktop friend for us.
 **BAA** — a NewJeans lightstick that lives on your Mac.
 
 ✨ Always-on-top lightstick pet  
-📅 Free calendar — add plans, AirDrop / sync (no login)  
+📅 Free calendar — add plans, Sync to Calendar (no login)  
 💬 Optional upgrade: make Binky your AI assistant with Grok  
 💗 Member birthdays + Debut Day (22 Jul) color heart  
 
@@ -44,7 +44,7 @@ Hey Bunnies 🐰
 **BAA** — 會住喺你 Mac 上面嘅 NewJeans 應援棒。
 
 ✨ 永遠置頂嘅 lightstick 桌面寵物  
-📅 免費日曆 — 自己加行程、AirDrop／同步（唔使登入）  
+📅 免費日曆 — 自己加行程、同步到日曆（唔使登入）  
 💬 可選升級：用 Grok 讓 Binky 做你嘅 AI 助手  
 💗 成員生日 + 出道日（7/22）五色漸層心  
 
@@ -85,7 +85,7 @@ https://github.com/PaytonHui/BAA/releases/tag/v0.1.4
 No API key needed to start 🗓️  
 
 Open BAA → left-click the stick → Calendar  
-Add your own plans · AirDrop to iPhone  
+Add your own plans · Sync to Calendar  
 
 Chat with Binky is optional — “Make Binky your AI assistant” with Grok when you want.  
 
@@ -99,7 +99,7 @@ v0.1.4 → https://github.com/PaytonHui/BAA/releases/tag/v0.1.4
 開始用唔使 API key 🗓️  
 
 打開 BAA → 左鍵 click 應援棒 → 日曆  
-自己加行程 · AirDrop 去 iPhone  
+自己加行程 · 同步到日曆  
 
 同 Binky 傾偈係可選升級 — 想要 AI 助手再用 Grok。  
 
