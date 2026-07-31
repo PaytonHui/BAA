@@ -1012,6 +1012,7 @@ pub fn run() {
             save_config,
             schedule_store::load_schedule,
             schedule_store::save_schedule,
+            schedule_store::save_schedule_json,
             schedule_store::load_schedule_reminded,
             schedule_store::save_schedule_reminded,
             weather::fetch_weather_native,

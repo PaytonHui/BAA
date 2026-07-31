@@ -6,7 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { PhysicalPosition } from "@tauri-apps/api/dpi";
 import { GrokPet } from "./components/GrokPet";
@@ -39,12 +39,15 @@ import {
   type AnimKind,
 } from "./lib/animCues";
 import {
+  flushScheduleToDisk,
   getDueReminders,
   hydrateReminded,
   hydrateSchedule,
   loadSchedule,
   markReminded,
   reloadScheduleFromDisk,
+  saveSchedule,
+  saveScheduleAsync,
   todayKey,
   type ScheduleEvent,
 } from "./lib/schedule";
@@ -1771,8 +1774,65 @@ export default function App() {
   const syncToAppleCalendar = useCallback(async () => {
     await collapseMenuIfOpen();
 
-    // Always re-read disk — other windows (calendar) write there
-    const events = await reloadScheduleFromDisk().catch(() => loadSchedule());
+    // 1) Ask calendar/chat windows to flush in-memory plans (includes just-added)
+    type FlushReply = { events?: ScheduleEvent[]; source?: string };
+    const replies: ScheduleEvent[][] = [];
+    const flushed = await new Promise<ScheduleEvent[] | null>((resolve) => {
+      let done = false;
+      let unlisten: (() => void) | undefined;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        try {
+          unlisten?.();
+        } catch {
+          /* ignore */
+        }
+        // Prefer the richest reply (most events = calendar window with new plans)
+        if (!replies.length) {
+          resolve(null);
+          return;
+        }
+        replies.sort((a, b) => b.length - a.length);
+        resolve(replies[0] ?? null);
+      };
+      void listen<FlushReply>("schedule-flush-reply", (ev) => {
+        const raw = ev.payload?.events;
+        if (Array.isArray(raw) && raw.length) {
+          replies.push(raw as ScheduleEvent[]);
+        }
+      }).then((fn) => {
+        unlisten = fn;
+        void emit("schedule-flush-request", {}).catch(() => undefined);
+      });
+      void flushScheduleToDisk().catch(() => undefined);
+      // Give calendar window time to write disk + reply
+      window.setTimeout(() => finish(), 1800);
+    });
+
+    // 2) Union: flushed (richest) ∪ disk ∪ main memory
+    const disk = await reloadScheduleFromDisk().catch(() => loadSchedule());
+    const local = loadSchedule();
+    const byId = new Map<string, ScheduleEvent>();
+    for (const e of disk) byId.set(e.id, e);
+    for (const e of local) byId.set(e.id, e);
+    if (flushed) {
+      for (const e of flushed) {
+        if (e?.id) byId.set(e.id, e);
+      }
+    }
+    const events = Array.from(byId.values()).filter(
+      (e) => e.id && e.date && e.title
+    );
+
+    // 3) Force-write merged list so disk cannot lag behind Apple sync
+    try {
+      await saveScheduleAsync(events);
+    } catch {
+      saveSchedule(events);
+      await new Promise<void>((r) => window.setTimeout(r, 250));
+    }
+
     const payload = mapEventsForCal(events);
     if (payload.length === 0) {
       fireAnim("wake");
@@ -1788,10 +1848,9 @@ export default function App() {
       const msg = await invoke<string>("sync_apple_calendar", {
         events: payload,
       });
-      console.log("[calendar] sync", msg);
+      console.log("[calendar] sync", msg, "payload", payload.length);
       fireAnim("color");
       setExpression("happy");
-      // Prefer short friendly line for bubble
       const first = (msg.split("\n")[0] || msg).trim();
       const short =
         first.length > 100
@@ -1808,7 +1867,6 @@ export default function App() {
             ? e.message
             : String(e);
       setExpression("sad");
-      // Common: Automation / Calendars permission denied
       const tip = /not authorized|not allowed|1002|(-1743)|privilege|permission/i.test(
         raw
       )

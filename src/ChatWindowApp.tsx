@@ -17,6 +17,7 @@ import {
   applyScheduleUpserts,
   eventCategory,
   extractScheduleFromReply,
+  flushScheduleToDisk,
   formatCancelledSummary,
   formatMarkedSummary,
   formatUpdatedSummary,
@@ -167,6 +168,30 @@ export default function ChatWindowApp() {
       u3?.();
     };
   }, [refreshAuth]);
+
+  // Flush memory → disk when main window Syncs to Apple Calendar
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    void listen("schedule-flush-request", () => {
+      void (async () => {
+        try {
+          const list = await flushScheduleToDisk();
+          await emit("schedule-flush-reply", {
+            events: list,
+            source: "chat",
+          }).catch(() => undefined);
+        } catch {
+          await emit("schedule-flush-reply", {
+            events: loadSchedule(),
+            source: "chat",
+          }).catch(() => undefined);
+        }
+      })();
+    }).then((fn) => {
+      un = fn;
+    });
+    return () => un?.();
+  }, []);
 
   const notifyPet = useCallback(
     async (expression: PetExpression, anim?: string) => {

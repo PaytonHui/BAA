@@ -49,6 +49,8 @@ fn sync_apple_calendar_inner(events: Vec<BaaCalEvent>) -> Result<String, String>
         let mut events = resolve_baa_events(events)?;
         // Never push decorative defaults into Apple Calendar
         events.retain(|e| !e.id.starts_with("baa-default:"));
+        // Newest first so a timeout still lands the plan the user just added
+        events.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.title.cmp(&b.title)));
         let n = events.len();
         if n == 0 {
             return Err("No plans to sync — add some in BAA Calendar first".into());
@@ -63,19 +65,21 @@ fn sync_apple_calendar_inner(events: Vec<BaaCalEvent>) -> Result<String, String>
                     .args(["-a", "Calendar"])
                     .status();
                 let msg = format!(
-                    "Replaced Calendar “BAA” with {synced} latest plans. Sidebar → enable BAA."
+                    "Synced {synced} plans → Calendar “BAA”. In Calendar sidebar, tick BAA."
                 );
-                mac_notify("BAA", &format!("Updated “BAA” · {synced} plans"));
+                mac_notify("BAA", &format!("Synced {synced} plans to “BAA”"));
                 Ok(msg)
             }
             Ok(synced) => {
+                // Partial success — still useful; ICS has the full set
                 let _ = std::process::Command::new("open")
                     .args(["-a", "Calendar"])
                     .status();
                 let msg = format!(
-                    "Replaced “BAA” with {synced}/{n} plans. Check Calendar sidebar → BAA."
+                    "Synced {synced}/{n} plans to “BAA” (some may need a re-sync). Sidebar → tick BAA. Full list also in Downloads/BAA.ics"
                 );
-                mac_notify("BAA", &msg);
+                mac_notify("BAA", &format!("Synced {synced}/{n} plans to “BAA”"));
+                let _ = path; // ICS already written
                 Ok(msg)
             }
             Err(e) => {
@@ -84,7 +88,7 @@ fn sync_apple_calendar_inner(events: Vec<BaaCalEvent>) -> Result<String, String>
                     .status();
                 eprintln!("[baa] calendar automation failed: {e}");
                 Err(format!(
-                    "Calendar blocked automation. Allow BAA in System Settings → Privacy → Calendars + Automation. Opened BAA.ics ({n}) as backup."
+                    "Could not write Calendar “BAA”: {e}. Opened BAA.ics backup — choose Add All. Also allow BAA under System Settings → Privacy → Calendars + Automation."
                 ))
             }
         }
@@ -98,29 +102,60 @@ fn sync_apple_calendar_inner(events: Vec<BaaCalEvent>) -> Result<String, String>
 
 // ─── Event resolution / ICS ──────────────────────────────────────────────────
 
-/// Prefer disk schedule when the frontend payload is empty/stale.
-fn resolve_baa_events(events: Vec<BaaCalEvent>) -> Result<Vec<BaaCalEvent>, String> {
-    if !events.is_empty() {
-        return Ok(events);
+/// Union frontend payload with on-disk schedule so a just-added plan
+/// (saved by the calendar window) is never dropped when main’s list is stale.
+fn resolve_baa_events(frontend: Vec<BaaCalEvent>) -> Result<Vec<BaaCalEvent>, String> {
+    use std::collections::HashMap;
+
+    let mut map: HashMap<String, BaaCalEvent> = HashMap::new();
+
+    if let Ok(disk) = schedule_store::load_schedule() {
+        for e in disk {
+            if e.id.is_empty() || e.id.starts_with("baa-default:") {
+                continue;
+            }
+            if e.date.is_empty() || e.title.is_empty() {
+                continue;
+            }
+            map.insert(
+                e.id.clone(),
+                BaaCalEvent {
+                    id: e.id,
+                    date: e.date,
+                    title: e.title,
+                    time: e.time,
+                    end_time: e.end_time,
+                    note: e.note,
+                    category: e.category,
+                    end_date: e.end_date,
+                },
+            );
+        }
     }
-    let disk = schedule_store::load_schedule()?;
-    if disk.is_empty() {
+
+    for e in frontend {
+        if e.id.is_empty() || e.id.starts_with("baa-default:") {
+            continue;
+        }
+        if e.date.is_empty() || e.title.is_empty() {
+            continue;
+        }
+        // Frontend can refresh title/time for same id
+        map.insert(e.id.clone(), e);
+    }
+
+    let mut out: Vec<BaaCalEvent> = map.into_values().collect();
+    if out.is_empty() {
         return Err("No plans to sync — add some in BAA Calendar first".into());
     }
-    Ok(disk
-        .into_iter()
-        .filter(|e| !e.id.starts_with("baa-default:"))
-        .map(|e| BaaCalEvent {
-            id: e.id,
-            date: e.date,
-            title: e.title,
-            time: e.time,
-            end_time: e.end_time,
-            note: e.note,
-            category: e.category,
-            end_date: e.end_date,
-        })
-        .collect())
+    out.sort_by(|a, b| {
+        (&a.date, a.time.as_deref().unwrap_or(""), &a.title).cmp(&(
+            &b.date,
+            b.time.as_deref().unwrap_or(""),
+            &b.title,
+        ))
+    });
+    Ok(out)
 }
 
 fn write_baa_ics_file(events: &[BaaCalEvent]) -> Result<PathBuf, String> {
@@ -285,15 +320,58 @@ fn build_ics_from_events(events: &[BaaCalEvent]) -> String {
 
 // ─── macOS Calendar automation ───────────────────────────────────────────────
 
+/// Show a macOS notification attributed to **this app** (BAA icon).
+///
+/// Do **not** use `osascript display notification` — that runs as osascript /
+/// Script Editor and shows the wrong icon in Notification Center.
+///
+/// Delivering `NSUserNotification` from the BAA process uses
+/// `CFBundleIdentifier` / `icon.icns` of BAA.app.
 #[cfg(target_os = "macos")]
 fn mac_notify(title: &str, body: &str) {
-    let t = title.replace('\\', "\\\\").replace('"', "\\\"");
-    let b = body.replace('\\', "\\\\").replace('"', "\\\"");
-    let _ = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(format!(r#"display notification "{b}" with title "{t}""#))
-        .status();
+    unsafe {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+        use std::ffi::CString;
+
+        let Some(str_cls) = AnyClass::get(c"NSString") else {
+            return;
+        };
+        let to_ns = |s: &str| -> *mut AnyObject {
+            let c = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
+            let p: *mut AnyObject = msg_send![str_cls, stringWithUTF8String: c.as_ptr()];
+            p
+        };
+
+        let Some(notif_cls) = AnyClass::get(c"NSUserNotification") else {
+            return;
+        };
+        let notif: *mut AnyObject = msg_send![notif_cls, alloc];
+        let notif: *mut AnyObject = msg_send![notif, init];
+        if notif.is_null() {
+            return;
+        }
+
+        let _: () = msg_send![notif, setTitle: to_ns(title)];
+        let _: () = msg_send![notif, setInformativeText: to_ns(body)];
+        // So repeat syncs replace the previous banner entry
+        let _: () = msg_send![notif, setIdentifier: to_ns("com.paytonhui.baa.calendar-sync")];
+        // Built-in macOS alert sound by name
+        let _: () = msg_send![notif, setSoundName: to_ns("Glass")];
+
+        let Some(center_cls) = AnyClass::get(c"NSUserNotificationCenter") else {
+            return;
+        };
+        let center: *mut AnyObject = msg_send![center_cls, defaultUserNotificationCenter];
+        if center.is_null() {
+            return;
+        }
+        let _: () = msg_send![center, deliverNotification: notif];
+    }
 }
+
+#[cfg(not(target_os = "macos"))]
+fn mac_notify(_title: &str, _body: &str) {}
 
 #[cfg(target_os = "macos")]
 fn run_osascript_timed(script: &str, timeout_secs: u64) -> Result<(), String> {
@@ -417,13 +495,38 @@ fn month_name(mo: u32) -> Option<&'static str> {
     })
 }
 
-/// Create/find calendar **BAA**, then wipe **all** its events.
+/// Build AppleScript that sets a date var safely.
 ///
-/// “BAA” is dedicated to this app — Sync always replaces the previous snapshot
-/// so syncing twice never stacks duplicate events on the same day.
+/// Classic AppleScript bug: if today is day 31 and you set `month` before
+/// `day`, months with fewer days (e.g. Nov) roll over (Nov 31 → Dec 1), so
+/// Nov 7 becomes Dec 7 and Sync looks broken. Always set day=1 first.
 #[cfg(target_os = "macos")]
-fn ensure_baa_calendar_cleared() -> Result<(), String> {
-    // Two-pass delete: Calendar sometimes keeps stale event refs after one delete.
+fn applescript_set_date(
+    var: &str,
+    y: i32,
+    month: &str,
+    d: u32,
+    h: u32,
+    min: u32,
+) -> String {
+    format!(
+        r#"
+  set {var} to current date
+  set day of {var} to 1
+  set year of {var} to {y}
+  set month of {var} to {month}
+  set day of {var} to {d}
+  set hours of {var} to {h}
+  set minutes of {var} to {min}
+  set seconds of {var} to 0
+"#
+    )
+}
+
+/// Create/find calendar **BAA** (never wipes — wipe-then-insert was losing plans
+/// when a later batch timed out).
+#[cfg(target_os = "macos")]
+fn ensure_baa_calendar_exists() -> Result<(), String> {
     let script = r#"tell application "Calendar"
   set calName to "BAA"
   set cal to missing value
@@ -436,22 +539,9 @@ fn ensure_baa_calendar_cleared() -> Result<(), String> {
   if cal is missing value then
     set cal to make new calendar with properties {name:calName}
   end if
-  -- Full wipe (calendar is BAA-only)
-  try
-    delete (every event of cal)
-  end try
-  delay 0.3
-  try
-    set leftover to every event of cal
-    repeat with e in leftover
-      try
-        delete e
-      end try
-    end repeat
-  end try
 end tell
 "#;
-    run_osascript_timed(script, 45)
+    run_osascript_timed(script, 30)
 }
 
 #[cfg(target_os = "macos")]
@@ -528,23 +618,46 @@ fn append_event_scripts(script: &mut String, events: &[BaaCalEvent]) -> usize {
             None => (0, 0),
         };
 
+        // Conflict rule (user request): only replace when SAME TITLE + SAME DAY.
+        // Never wipe the whole calendar; leave other events untouched.
+        script.push_str(&format!(
+            r#"
+  -- Delete only total conflicts: same summary + same calendar day
+  try
+    set allEv to every event of cal
+    repeat with oe in allEv
+      try
+        if (summary of oe as text) is "{title}" then
+          set sd to start date of oe
+          if (year of sd) is {y} and (month of sd) is {start_month} and (day of sd) is {d} then
+            delete oe
+          end if
+        end if
+      end try
+    end repeat
+  end try
+"#
+        ));
+
         if all_day {
+            script.push_str(&applescript_set_date(
+                "startDate",
+                y,
+                start_month,
+                d,
+                0,
+                0,
+            ));
+            script.push_str(&applescript_set_date(
+                "endDate",
+                end_y,
+                end_month,
+                end_d,
+                0,
+                0,
+            ));
             script.push_str(&format!(
                 r#"
-  set startDate to current date
-  set year of startDate to {y}
-  set month of startDate to {start_month}
-  set day of startDate to {d}
-  set hours of startDate to 0
-  set minutes of startDate to 0
-  set seconds of startDate to 0
-  set endDate to current date
-  set year of endDate to {end_y}
-  set month of endDate to {end_month}
-  set day of endDate to {end_d}
-  set hours of endDate to 0
-  set minutes of endDate to 0
-  set seconds of endDate to 0
   set endDate to endDate + (1 * days)
   tell cal
     make new event with properties {{summary:"{title}", start date:startDate, end date:endDate, allday event:true, description:"{desc}"}}
@@ -552,22 +665,24 @@ fn append_event_scripts(script: &mut String, events: &[BaaCalEvent]) -> usize {
 "#
             ));
         } else {
+            script.push_str(&applescript_set_date(
+                "startDate",
+                y,
+                start_month,
+                d,
+                h,
+                m,
+            ));
+            script.push_str(&applescript_set_date(
+                "endDate",
+                end_y,
+                end_month,
+                end_d,
+                eh,
+                em,
+            ));
             script.push_str(&format!(
                 r#"
-  set startDate to current date
-  set year of startDate to {y}
-  set month of startDate to {start_month}
-  set day of startDate to {d}
-  set hours of startDate to {h}
-  set minutes of startDate to {m}
-  set seconds of startDate to 0
-  set endDate to current date
-  set year of endDate to {end_y}
-  set month of endDate to {end_month}
-  set day of endDate to {end_d}
-  set hours of endDate to {eh}
-  set minutes of endDate to {em}
-  set seconds of endDate to 0
   if endDate ≤ startDate then
     set endDate to startDate + (1 * hours)
   end if
@@ -582,24 +697,23 @@ fn append_event_scripts(script: &mut String, events: &[BaaCalEvent]) -> usize {
     n
 }
 
-/// Full replace: wipe BAA calendar, then write the latest plan list in batches.
+/// Add/update plans on Calendar “BAA”.
+/// - Never replaces the whole calendar
+/// - Only replaces an existing event when title + day fully conflict
 #[cfg(target_os = "macos")]
 fn sync_baa_calendar_macos(events: &[BaaCalEvent]) -> Result<usize, String> {
     if events.is_empty() {
         return Err("No events to sync — add plans in Calendar first".into());
     }
 
-    // Always clear first so a second Sync never doubles events
-    if let Err(e) = ensure_baa_calendar_cleared() {
-        return Err(format!("Could not clear old BAA events: {e}"));
+    if let Err(e) = ensure_baa_calendar_exists() {
+        return Err(format!("Could not open Calendar “BAA”: {e}"));
     }
-    // Brief pause so Calendar commits deletes before inserts
-    std::thread::sleep(Duration::from_millis(400));
 
-    const BATCH: usize = 5;
+    // One event per AppleScript call for reliability
     let mut total = 0usize;
     let mut last_err: Option<String> = None;
-    for chunk in events.chunks(BATCH) {
+    for ev in events {
         let mut script = String::from(
             r#"tell application "Calendar"
   set calName to "BAA"
@@ -615,18 +729,20 @@ fn sync_baa_calendar_macos(events: &[BaaCalEvent]) -> Result<usize, String> {
   end if
 "#,
         );
-        let n = append_event_scripts(&mut script, chunk);
+        let n = append_event_scripts(&mut script, std::slice::from_ref(ev));
         script.push_str("\nend tell\n");
         if n == 0 {
             continue;
         }
-        match run_osascript_timed(&script, 35) {
+        match run_osascript_timed(&script, 45) {
             Ok(()) => total += n,
             Err(e) => {
+                eprintln!("[baa] sync one failed ({}): {e}", ev.title);
                 last_err = Some(e);
-                break;
+                continue;
             }
         }
+        std::thread::sleep(Duration::from_millis(60));
     }
 
     if total == 0 {

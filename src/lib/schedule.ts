@@ -314,10 +314,14 @@ function writeLocalStorage(events: ScheduleEvent[]) {
 }
 
 function isTauri(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    !!(window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
-  );
+  if (typeof window === "undefined") return false;
+  const w = window as unknown as {
+    isTauri?: boolean;
+    __TAURI_INTERNALS__?: unknown;
+    __TAURI__?: unknown;
+  };
+  // Tauri 2 sets window.isTauri; older code checked __TAURI_INTERNALS__ only
+  return !!(w.isTauri || w.__TAURI_INTERNALS__ || w.__TAURI__);
 }
 
 /**
@@ -331,6 +335,41 @@ export function loadSchedule(): ScheduleEvent[] {
   return local;
 }
 
+/** Wire shape for Rust save_schedule (always JSON-safe). */
+function toDiskPayload(events: ScheduleEvent[]) {
+  return events.map((e) => ({
+    id: String(e.id),
+    date: String(e.date),
+    title: String(e.title),
+    time: e.time ? String(e.time) : null,
+    endTime: e.endTime ? String(e.endTime) : null,
+    endDate: e.endDate ? String(e.endDate) : null,
+    note: e.note ? String(e.note) : null,
+    category: e.category ? String(e.category) : null,
+    createdAt:
+      typeof e.createdAt === "number" && Number.isFinite(e.createdAt)
+        ? Math.floor(e.createdAt)
+        : Date.now(),
+  }));
+}
+
+async function invokeSaveToDisk(events: ScheduleEvent[]): Promise<number> {
+  const payload = toDiskPayload(events);
+  const json = JSON.stringify(payload);
+  // Prefer JSON-string command — most reliable across Tauri IPC / multi-window
+  try {
+    return await invoke<number>("save_schedule_json", { json });
+  } catch (e1) {
+    console.warn("[schedule] save_schedule_json failed, fallback", e1);
+    try {
+      return await invoke<number>("save_schedule", { events: payload });
+    } catch (e2) {
+      // Last resort: pass the array as a JSON string inside `events`
+      return await invoke<number>("save_schedule", { events: json });
+    }
+  }
+}
+
 /**
  * Persist schedule to memory + localStorage + disk (survives quit).
  * Fire-and-forget disk write (ok for UI toggles).
@@ -339,8 +378,8 @@ export function saveSchedule(events: ScheduleEvent[]) {
   scheduleWriteGen += 1;
   memoryCache = events;
   writeLocalStorage(events);
-  if (!isTauri()) return;
-  void invoke("save_schedule", { events }).catch((e) => {
+  // Always attempt disk write — never skip just because isTauri() is flaky
+  void invokeSaveToDisk(events).catch((e) => {
     console.error("[schedule] disk save failed", e);
   });
 }
@@ -350,24 +389,59 @@ export async function saveScheduleAsync(events: ScheduleEvent[]) {
   const gen = ++scheduleWriteGen;
   memoryCache = events;
   writeLocalStorage(events);
-  if (!isTauri()) return;
   try {
-    await Promise.race([
-      invoke("save_schedule", { events }),
+    const n = await Promise.race([
+      invokeSaveToDisk(events),
       new Promise<never>((_, rej) =>
         window.setTimeout(
           () => rej(new Error("save_schedule timed out")),
-          4000
+          8000
         )
       ),
     ]);
-    // Another save started while we waited — don't treat as failure
+    // Verify every user plan id is on disk
+    try {
+      const disk = normalizeList(await invoke<unknown>("load_schedule"));
+      const diskIds = new Set(disk.map((e) => e.id));
+      const missing = events.filter(
+        (e) =>
+          !e.id.startsWith("baa-default:") &&
+          !!e.title?.trim() &&
+          !!e.date?.trim() &&
+          !diskIds.has(e.id)
+      );
+      if (missing.length > 0) {
+        console.warn(
+          `[schedule] disk missing ${missing.length} id(s), rewriting full list`,
+          missing.map((m) => m.title)
+        );
+        await invokeSaveToDisk(events);
+      }
+    } catch {
+      /* verify optional */
+    }
+    console.log(`[schedule] disk save ok (${n} events)`);
     void gen;
   } catch (e) {
     console.error("[schedule] disk save failed", e);
-    // Keep memory + localStorage; disk may catch up on next write
     throw e;
   }
+}
+
+/**
+ * Force current in-memory schedule onto disk (for Sync / multi-window).
+ * Returns the list that was written.
+ */
+export async function flushScheduleToDisk(): Promise<ScheduleEvent[]> {
+  const list = loadSchedule();
+  if (!list.length) return list;
+  try {
+    await saveScheduleAsync(list);
+  } catch {
+    saveSchedule(list);
+    await new Promise<void>((r) => window.setTimeout(r, 200));
+  }
+  return loadSchedule();
 }
 
 /**
@@ -378,9 +452,7 @@ function withDefaults(list: ScheduleEvent[]): ScheduleEvent[] {
   if (added > 0) {
     memoryCache = events;
     writeLocalStorage(events);
-    if (isTauri()) {
-      void invoke("save_schedule", { events }).catch(() => undefined);
-    }
+    void invokeSaveToDisk(events).catch(() => undefined);
     return events;
   }
   memoryCache = events;
@@ -409,7 +481,7 @@ export async function hydrateSchedule(): Promise<ScheduleEvent[]> {
       const local = readLocalStorage();
       if (local.length > 0) {
         const merged = withDefaults(local);
-        await invoke("save_schedule", { events: merged }).catch(() => undefined);
+        await invokeSaveToDisk(merged).catch(() => undefined);
         return merged;
       }
       return withDefaults([]);
@@ -1750,6 +1822,31 @@ export function eachDateKey(start: string, end?: string): string[] {
     cur.setDate(cur.getDate() + 1);
   }
   return out;
+}
+
+/** Multi-day mark modes for “same job time on several days”. */
+export type MultiDayMode = "once" | "daily" | "weekdays";
+
+/**
+ * Expand a start→end range into date keys.
+ * - once: just start
+ * - daily: every day inclusive
+ * - weekdays: Mon–Fri only (ideal for work shifts)
+ */
+export function expandMultiDayDates(
+  start: string,
+  end: string | undefined,
+  mode: MultiDayMode
+): string[] {
+  if (mode === "once" || !end || end <= start) return [start];
+  const all = eachDateKey(start, end);
+  if (mode === "daily") return all;
+  // weekdays: JS getDay() 0=Sun … 6=Sat → keep 1–5
+  return all.filter((key) => {
+    const [y, m, d] = key.split("-").map(Number);
+    const dow = new Date(y, m - 1, d).getDay();
+    return dow >= 1 && dow <= 5;
+  });
 }
 
 export function eventTouchesDate(e: ScheduleEvent, date: string): boolean {

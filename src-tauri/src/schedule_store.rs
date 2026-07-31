@@ -26,8 +26,76 @@ pub struct ScheduleEventDto {
     /// "work" | "school" | "event" | "family" | "friends" (legacy: "other" → event)
     #[serde(default)]
     pub category: Option<String>,
+    /// Default 0 so older clients / partial JSON still save
     #[serde(default)]
     pub created_at: u64,
+}
+
+/// Coerce a loose JSON value into ScheduleEventDto (nulls, missing fields OK).
+fn dto_from_value(v: &serde_json::Value) -> Option<ScheduleEventDto> {
+    let id = v.get("id")?.as_str()?.trim().to_string();
+    let date = v
+        .get("date")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let title = v
+        .get("title")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if id.is_empty() || date.is_empty() || title.is_empty() {
+        return None;
+    }
+    let opt_str = |key: &str| -> Option<String> {
+        match v.get(key) {
+            Some(serde_json::Value::String(s)) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            Some(serde_json::Value::Null) | None => None,
+            Some(other) => {
+                let t = other.to_string().trim().trim_matches('"').to_string();
+                if t.is_empty() || t == "null" {
+                    None
+                } else {
+                    Some(t)
+                }
+            }
+        }
+    };
+    // Accept both camelCase and snake_case
+    let end_date = opt_str("endDate").or_else(|| opt_str("end_date"));
+    let time = opt_str("time");
+    let end_time = opt_str("endTime").or_else(|| opt_str("end_time"));
+    let note = opt_str("note");
+    let category = opt_str("category");
+    let created_at = v
+        .get("createdAt")
+        .or_else(|| v.get("created_at"))
+        .and_then(|x| {
+            x.as_u64()
+                .or_else(|| x.as_f64().map(|f| f as u64))
+                .or_else(|| x.as_i64().map(|i| i.max(0) as u64))
+        })
+        .unwrap_or(0);
+    Some(ScheduleEventDto {
+        id,
+        date,
+        end_date,
+        title,
+        time,
+        end_time,
+        note,
+        category,
+        created_at,
+    })
 }
 
 fn baa_dir() -> Result<PathBuf, String> {
@@ -75,18 +143,89 @@ pub fn load_schedule() -> Result<Vec<ScheduleEventDto>, String> {
         .collect())
 }
 
-/// Save full schedule list to disk (atomic-ish write via temp + rename).
-#[tauri::command]
-pub fn save_schedule(events: Vec<ScheduleEventDto>) -> Result<(), String> {
+fn parse_event_list(events: serde_json::Value) -> Vec<ScheduleEventDto> {
+    match events {
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| {
+                serde_json::from_value::<ScheduleEventDto>(v.clone())
+                    .ok()
+                    .or_else(|| dto_from_value(v))
+            })
+            .filter(|e| !e.id.is_empty() && !e.date.is_empty() && !e.title.is_empty())
+            .collect(),
+        serde_json::Value::String(s) => {
+            // JSON string payload (most reliable across Tauri IPC)
+            serde_json::from_str::<serde_json::Value>(&s)
+                .map(parse_event_list)
+                .unwrap_or_default()
+        }
+        other => dto_from_value(&other).into_iter().collect(),
+    }
+}
+
+fn write_schedule_list(list: &[ScheduleEventDto]) -> Result<usize, String> {
+    if list.is_empty() {
+        return Err("save_schedule: no valid events in payload".into());
+    }
     let path = schedule_path()?;
-    let raw = serde_json::to_string_pretty(&events).map_err(|e| e.to_string())?;
+    let raw = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, &raw).map_err(|e| e.to_string())?;
+    fs::write(&tmp, &raw).map_err(|e| format!("write tmp: {e}"))?;
     if fs::rename(&tmp, &path).is_err() {
-        fs::write(&path, &raw).map_err(|e| e.to_string())?;
+        fs::write(&path, &raw).map_err(|e| format!("write path: {e}"))?;
         let _ = fs::remove_file(&tmp);
     }
-    Ok(())
+    // Debug log for diagnosing stuck saves
+    let log = baa_dir().map(|d| d.join("save-debug.log")).ok();
+    if let Some(log) = log {
+        let line = format!(
+            "{} wrote {} events → {}\n",
+            chrono_like_now(),
+            list.len(),
+            path.display()
+        );
+        let _ = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(line.as_bytes())
+            });
+    }
+    eprintln!(
+        "[baa] save_schedule wrote {} event(s) → {}",
+        list.len(),
+        path.display()
+    );
+    Ok(list.len())
+}
+
+fn chrono_like_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{ms}")
+}
+
+/// Save full schedule list to disk (atomic write via temp + rename).
+/// Accepts a JSON array **or** a JSON string of an array (IPC-safe).
+#[tauri::command]
+pub fn save_schedule(events: serde_json::Value) -> Result<usize, String> {
+    let list = parse_event_list(events);
+    write_schedule_list(&list)
+}
+
+/// Same as save_schedule but takes a raw JSON string — use from frontend for reliability.
+#[tauri::command]
+pub fn save_schedule_json(json: String) -> Result<usize, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(&json).map_err(|e| format!("save_schedule_json parse: {e}"))?;
+    let list = parse_event_list(value);
+    write_schedule_list(&list)
 }
 
 /// Load reminder-sent map (eventId → timestamp) so we don't re-chime after relaunch.
