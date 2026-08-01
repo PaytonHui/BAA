@@ -135,8 +135,37 @@ export default function CalendarWindowApp() {
       /* ignore */
     }
     writingRef.current = false;
+    // Drop Add/Edit composer so next open starts clean
+    formOpenRef.current = false;
+    window.dispatchEvent(new CustomEvent("baa-cal-cancel-form"));
     await emit("calendar-closed", {}).catch(() => undefined);
   });
+
+  // Lightstick tap: cancel Add/Edit composer if open, otherwise close calendar
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("calendar-lightstick-tap", () => {
+      if (formOpenRef.current) {
+        window.dispatchEvent(new CustomEvent("baa-cal-cancel-form"));
+        return;
+      }
+      void close();
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [close]);
+
+  // Re-open calendar: always clear composer (main resets formOpenRef on shown)
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("calendar-window-shown", () => {
+      window.dispatchEvent(new CustomEvent("baa-cal-cancel-form"));
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, []);
 
   const onRemove = useCallback((id: string) => {
     const next = loadSchedule().filter((e) => e.id !== id);

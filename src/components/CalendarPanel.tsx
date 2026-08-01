@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { calendarDayMark } from "../lib/defaultCalendar";
 import { IosTimePicker } from "./IosTimePicker";
 import { resizeCalendarForComposer } from "../lib/panelWindow";
@@ -110,15 +110,40 @@ export function CalendarPanel({
     setFormError(null);
   }, [selected]);
 
-  // Keep multi-end ≥ selected start when picking days
-  useEffect(() => {
-    if (multiEnd < selected) setMultiEnd(selected);
-  }, [selected, multiEnd]);
+  /** Inclusive range ends (Excel-style: anchor may be after end). */
+  const rangeStart = selected <= multiEnd ? selected : multiEnd;
+  const rangeEnd = selected <= multiEnd ? multiEnd : selected;
 
   const multiDates = useMemo(() => {
     if (editingId || multiMode === "once") return [selected];
-    return expandMultiDayDates(selected, multiEnd, multiMode);
-  }, [editingId, multiMode, multiEnd, selected]);
+    return expandMultiDayDates(rangeStart, rangeEnd, multiMode);
+  }, [editingId, multiMode, rangeStart, rangeEnd, selected]);
+
+  /**
+   * Day pick on the month grid.
+   * - Click: select that day (clears multi-day range)
+   * - Shift+click: range from anchor → this day (same month only, like Excel)
+   */
+  const onDayClick = (key: string, e: React.MouseEvent) => {
+    if (e.shiftKey && !editingId) {
+      const [sy, sm] = selected.split("-").map(Number);
+      const [cy, cm] = key.split("-").map(Number);
+      if (sy === cy && sm === cm) {
+        setMultiEnd(key);
+        if (key === selected) {
+          setMultiMode("once");
+        } else if (multiMode === "once") {
+          setMultiMode("daily");
+        }
+        // keep "weekdays" / "daily" if already multi
+        return;
+      }
+      // Different month from anchor → normal select (range only within one month)
+    }
+    setSelected(key);
+    setMultiEnd(key);
+    setMultiMode("once");
+  };
 
   // Size OS window to the measured card (not a fixed oversized height)
   useEffect(() => {
@@ -150,19 +175,46 @@ export function CalendarPanel({
     );
   }, [addOpen]);
 
-  // Close context menu on outside click / escape
+  /** Cancel Add/Edit sheet (lightstick tap, Escape, calendar reopen/close) */
+  const cancelComposer = useCallback(() => {
+    setAddOpen(false);
+    setTitle("");
+    setTimeTab("start");
+    setCategory("event");
+    setFormError(null);
+    setEditingId(null);
+    setMultiMode("once");
+    setMultiEnd(selected);
+    setCtxMenu(null);
+  }, [selected]);
+
+  useEffect(() => {
+    const onCancel = () => cancelComposer();
+    window.addEventListener("baa-cal-cancel-form", onCancel);
+    return () => window.removeEventListener("baa-cal-cancel-form", onCancel);
+  }, [cancelComposer]);
+
+  // Escape closes composer first, then context menu
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (addOpen) {
+        e.preventDefault();
+        cancelComposer();
+        return;
+      }
+      if (ctxMenu) setCtxMenu(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [addOpen, ctxMenu, cancelComposer]);
+
+  // Close context menu on outside click
   useEffect(() => {
     if (!ctxMenu) return;
     const close = () => setCtxMenu(null);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
-    };
     window.addEventListener("click", close);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("keydown", onKey);
-    };
+    return () => window.removeEventListener("click", close);
   }, [ctxMenu]);
 
   const catsByDate = useMemo(() => categoriesByDate(events), [events]);
@@ -250,14 +302,10 @@ export function CalendarPanel({
         return;
       }
     }
-    // Multi-day only for new plans (not edit)
+    // Multi-day only for new plans (not edit) — range from Shift+click on grid
     let dates: string[] | undefined;
-    if (!editingId && multiMode !== "once") {
-      if (multiEnd < selected) {
-        setFormError("End date must be on or after the start day");
-        return;
-      }
-      dates = expandMultiDayDates(selected, multiEnd, multiMode);
+    if (!editingId && multiMode !== "once" && multiDates.length > 1) {
+      dates = multiDates;
       if (!dates.length) {
         setFormError("No days in that range (check weekdays filter)");
         return;
@@ -328,18 +376,24 @@ export function CalendarPanel({
     } else setMonth((m) => m + 1);
   };
 
-  const selectedLabel = (() => {
+  const formatDayLabel = (key: string) => {
     try {
-      const [y, m, d] = selected.split("-").map(Number);
+      const [y, m, d] = key.split("-").map(Number);
       return new Date(y, m - 1, d).toLocaleDateString(undefined, {
         weekday: "short",
         month: "short",
         day: "numeric",
       });
     } catch {
-      return selected;
+      return key;
     }
-  })();
+  };
+
+  const selectedLabel = formatDayLabel(selected);
+  const multiRangeLabel =
+    !editingId && multiMode !== "once" && multiDates.length > 1
+      ? `${multiDates.length} days · ${rangeStart.slice(5)}–${rangeEnd.slice(5)}`
+      : selectedLabel;
 
   // Always height:auto so the card hugs content — never stretch white into empty OS chrome
   const panelW = large ? "w-[360px]" : "w-[280px]";
@@ -409,9 +463,12 @@ export function CalendarPanel({
           type="button"
           onClick={() => {
             const n = new Date();
+            const t = todayKey();
             setYear(n.getFullYear());
             setMonth(n.getMonth());
-            setSelected(todayKey());
+            setSelected(t);
+            setMultiEnd(t);
+            setMultiMode("once");
           }}
           className="shrink-0 text-[10px] px-2 py-1 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-600 font-semibold"
         >
@@ -460,6 +517,11 @@ export function CalendarPanel({
             const key = toDateKey(year, month, day);
             const isToday = key === todayKey();
             const isSel = key === selected;
+            const inMultiRange =
+              !editingId &&
+              multiMode !== "once" &&
+              key >= rangeStart &&
+              key <= rangeEnd;
             const dayCats = catsByDate.get(key) ?? [];
             const primary = dayCats[0];
             const primaryMeta = primary ? CATEGORY_META[primary] : null;
@@ -469,7 +531,7 @@ export function CalendarPanel({
               <button
                 key={key}
                 type="button"
-                onClick={() => setSelected(key)}
+                onClick={(e) => onDayClick(key, e)}
                 title={
                   dayMark
                     ? `${day} · ${dayMark.label}`
@@ -480,11 +542,13 @@ export function CalendarPanel({
                 className={`relative ${dayH} rounded-md ${dayText} font-semibold transition border flex flex-col items-center justify-center gap-0 leading-none ${
                   isSel
                     ? "bg-[#B8EF9A] border-neutral-800/80 text-neutral-900 shadow-sm"
-                    : primaryMeta
-                      ? `${primaryMeta.dayBg} border-transparent ${primaryMeta.dayText} hover:brightness-[0.98]`
-                      : isToday
-                        ? "bg-white border-neutral-300 text-neutral-900"
-                        : "bg-white/70 border-transparent hover:border-neutral-200 text-neutral-700"
+                    : inMultiRange
+                      ? "bg-[#D4F5BE] border-neutral-400/50 text-neutral-900"
+                      : primaryMeta
+                        ? `${primaryMeta.dayBg} border-transparent ${primaryMeta.dayText} hover:brightness-[0.98]`
+                        : isToday
+                          ? "bg-white border-neutral-300 text-neutral-900"
+                          : "bg-white/70 border-transparent hover:border-neutral-200 text-neutral-700"
                 }`}
               >
                 {dayMark?.kind === "nj-debut-heart" ? (
@@ -713,7 +777,7 @@ export function CalendarPanel({
       </div>
       )}
 
-      {/* Add / Edit plan — shrink-0 only (never flex-1 white stretch = bottom white bar) */}
+      {/* Add / Edit plan — compact form only */}
       {allowManualCreate && (onAdd || onUpdate) && (
         <div
           className="shrink-0 border-t border-black/[0.06] bg-white z-20"
@@ -747,104 +811,77 @@ export function CalendarPanel({
             >
               <div className="flex items-center justify-between gap-2">
                 <p className="text-[10px] font-semibold text-neutral-600">
-                  {editingId ? "Edit plan" : "New plan"} · {selectedLabel}
+                  {editingId ? "Edit plan" : "New plan"} · {multiRangeLabel}
                 </p>
                 <button
                   type="button"
-                  onClick={() => {
-                    setAddOpen(false);
-                    resetForm(true);
-                  }}
+                  onClick={cancelComposer}
                   className="text-[10px] font-semibold text-neutral-400 hover:text-neutral-600 px-1"
                 >
                   Cancel
                 </button>
               </div>
+
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Title (required)"
+                placeholder="Title"
                 autoFocus
                 className="w-full h-9 rounded-full border border-neutral-200 bg-[#F7F7F8] px-3 text-[13px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-400 focus:bg-white"
               />
 
-              {/* Multi-day: same job time across several days */}
-              {!editingId && (
+              {/* Multi-day controls only when a range is already selected */}
+              {!editingId && multiMode !== "once" && multiDates.length > 1 && (
                 <div className="rounded-2xl border border-neutral-200 bg-[#F7F7F8] p-2 space-y-1.5">
-                  <p className="text-[10px] font-semibold text-neutral-600 px-0.5">
-                    Days · same time
-                  </p>
-                  <div className="grid grid-cols-3 gap-1">
-                    {(
-                      [
-                        ["once", "1 day"],
-                        ["weekdays", "Weekdays"],
-                        ["daily", "Every day"],
-                      ] as const
-                    ).map(([mode, label]) => {
-                      const on = multiMode === mode;
-                      return (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => {
-                            setMultiMode(mode);
-                            if (mode !== "once" && multiEnd <= selected) {
-                              // Default end = +6 days (one work week-ish)
-                              const [y, m, d] = selected.split("-").map(Number);
-                              const dt = new Date(y, m - 1, d);
-                              dt.setDate(dt.getDate() + (mode === "weekdays" ? 6 : 6));
-                              setMultiEnd(
-                                toDateKey(
-                                  dt.getFullYear(),
-                                  dt.getMonth(),
-                                  dt.getDate()
-                                )
-                              );
-                            }
-                          }}
-                          className={`h-7 rounded-full text-[10px] font-semibold border transition ${
-                            on
-                              ? "bg-neutral-900 text-white border-neutral-900"
-                              : "bg-white text-neutral-600 border-neutral-200"
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
+                  <div className="flex items-center justify-between gap-2 px-0.5">
+                    <p className="text-[10px] font-semibold text-neutral-700">
+                      {multiMode === "weekdays"
+                        ? `${multiDates.length} weekdays`
+                        : `${multiDates.length} days`}
+                      <span className="font-normal text-neutral-500">
+                        {" "}
+                        · {rangeStart.slice(5)} → {rangeEnd.slice(5)}
+                      </span>
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMultiEnd(selected);
+                        setMultiMode("once");
+                      }}
+                      className="text-[10px] font-semibold text-neutral-400 hover:text-neutral-700 px-1"
+                    >
+                      Clear
+                    </button>
                   </div>
-                  {multiMode !== "once" && (
-                    <>
-                      <label className="flex items-center justify-between gap-2 px-0.5">
-                        <span className="text-[10px] text-neutral-500 shrink-0">
-                          Until
-                        </span>
-                        <input
-                          type="date"
-                          value={multiEnd}
-                          min={selected}
-                          onChange={(e) => setMultiEnd(e.target.value)}
-                          className="flex-1 h-7 rounded-full border border-neutral-200 bg-white px-2 text-[11px] text-neutral-800 outline-none"
-                        />
-                      </label>
-                      <p className="text-[10px] text-neutral-500 px-0.5">
-                        {multiMode === "weekdays"
-                          ? `Marks ${multiDates.length} weekday${multiDates.length === 1 ? "" : "s"} (Mon–Fri)`
-                          : `Marks ${multiDates.length} day${multiDates.length === 1 ? "" : "s"}`}
-                        {multiDates.length > 1 && multiDates.length <= 8
-                          ? ` · ${multiDates.map((d) => d.slice(5)).join(", ")}`
-                          : multiDates.length > 8
-                            ? ` · ${multiDates[0]?.slice(5)} … ${multiDates[multiDates.length - 1]?.slice(5)}`
-                            : ""}
-                      </p>
-                    </>
-                  )}
+                  <div className="grid grid-cols-2 gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setMultiMode("daily")}
+                      className={`h-7 rounded-full text-[10px] font-semibold border transition ${
+                        multiMode === "daily"
+                          ? "bg-neutral-900 text-white border-neutral-900"
+                          : "bg-white text-neutral-600 border-neutral-200"
+                      }`}
+                    >
+                      Every day
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMultiMode("weekdays")}
+                      className={`h-7 rounded-full text-[10px] font-semibold border transition ${
+                        multiMode === "weekdays"
+                          ? "bg-neutral-900 text-white border-neutral-900"
+                          : "bg-white text-neutral-600 border-neutral-200"
+                      }`}
+                    >
+                      Weekdays
+                    </button>
+                  </div>
                 </div>
               )}
 
-              {/* Start / End time tabs + one wheel (saves height) */}
               <div className="flex rounded-full bg-[#F2F2F7] p-0.5 gap-0.5">
                 <button
                   type="button"
@@ -870,7 +907,6 @@ export function CalendarPanel({
                   type="button"
                   onClick={() => {
                     if (!time) {
-                      // Need a start first
                       setTimeTab("start");
                       setFormError("Set start time first");
                       return;
@@ -922,7 +958,6 @@ export function CalendarPanel({
                 </p>
               )}
 
-              {/* Type: work / school / event / family / friends */}
               <div className="grid grid-cols-5 gap-1">
                 {SCHEDULE_CATEGORIES.map((c) => {
                   const meta = CATEGORY_META[c];
@@ -950,20 +985,18 @@ export function CalendarPanel({
                 })}
               </div>
 
-              <div className="flex gap-1.5 items-center">
-                <button
-                  type="submit"
-                  onClick={submitManual}
-                  disabled={!title.trim()}
-                  className="flex-1 h-8 rounded-full bg-neutral-900 hover:bg-neutral-800 disabled:opacity-35 text-white text-[12px] font-semibold cursor-pointer disabled:cursor-not-allowed"
-                >
-                  {editingId
-                    ? "Update"
-                    : multiMode !== "once" && multiDates.length > 1
-                      ? `Save · ${multiDates.length} days`
-                      : "Save"}
-                </button>
-              </div>
+              <button
+                type="submit"
+                onClick={submitManual}
+                disabled={!title.trim()}
+                className="w-full h-8 rounded-full bg-neutral-900 hover:bg-neutral-800 disabled:opacity-35 text-white text-[12px] font-semibold cursor-pointer disabled:cursor-not-allowed"
+              >
+                {editingId
+                  ? "Update"
+                  : multiMode !== "once" && multiDates.length > 1
+                    ? `Save · ${multiDates.length} days`
+                    : "Save"}
+              </button>
               {formError && (
                 <p className="text-[10px] text-rose-500 px-0.5">{formError}</p>
               )}

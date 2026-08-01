@@ -1537,24 +1537,6 @@ export default function App() {
     void openCalendar();
   };
 
-  const closeCalendar = useCallback(async () => {
-    if (!calendarOpen) return;
-    orbit.stop();
-    layoutBusyRef.current = true;
-
-    setCalendarOpen(false);
-    setCalendarLarge(false);
-
-    try {
-      await hidePanelWindow("calendar");
-      setShell("compact");
-    } catch (e) {
-      console.error(e);
-    } finally {
-      layoutBusyRef.current = false;
-    }
-  }, [calendarOpen, orbit]);
-
   const openSettings = useCallback(async () => {
     if (layoutBusyRef.current || settingsOpen) return;
     orbit.stop();
@@ -2244,7 +2226,8 @@ export default function App() {
         return;
       }
       if (calendarOpen) {
-        await closeCalendar();
+        // Calendar window: cancel Add/Edit composer if open, else close calendar
+        await emit("calendar-lightstick-tap", {}).catch(() => undefined);
         return;
       }
       if (colorPickerOpen) {
