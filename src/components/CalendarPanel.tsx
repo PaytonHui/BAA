@@ -145,17 +145,33 @@ export function CalendarPanel({
     setMultiMode("once");
   };
 
-  // Size OS window to the measured card (not a fixed oversized height)
+  const multiOpen =
+    !editingId && multiMode !== "once" && multiDates.length > 1;
+
+  // Size OS window to the measured card (not a fixed oversized height).
+  // Re-run when multi-day strip appears — form grows and must not clip Save.
   useEffect(() => {
     const el = panelRef.current;
+    const measure = () => {
+      if (!el) return undefined;
+      // Prefer scrollHeight: getBoundingClientRect can under-report when the
+      // OS window is still short and ancestors use overflow:hidden.
+      const rectH = el.getBoundingClientRect().height;
+      const scrollH = el.scrollHeight;
+      const offsetH = el.offsetHeight;
+      return Math.max(rectH, scrollH, offsetH);
+    };
     const apply = () => {
-      const h = el?.getBoundingClientRect().height;
-      void resizeCalendarForComposer(addOpen, large, h).catch(() => undefined);
+      const h = measure();
+      void resizeCalendarForComposer(addOpen, large, h, multiOpen).catch(
+        () => undefined
+      );
     };
     apply();
-    // After layout / time-wheel paint
+    // After layout / multi strip / time-wheel paint (staggered remeasures)
     const t1 = window.setTimeout(apply, 50);
     const t2 = window.setTimeout(apply, 200);
+    const t3 = window.setTimeout(apply, 400);
     let ro: ResizeObserver | null = null;
     if (el && typeof ResizeObserver !== "undefined") {
       ro = new ResizeObserver(() => apply());
@@ -164,9 +180,10 @@ export function CalendarPanel({
     return () => {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
+      window.clearTimeout(t3);
       ro?.disconnect();
     };
-  }, [addOpen, large]);
+  }, [addOpen, large, multiOpen, multiMode]);
 
   // Tell parent whether composer is open (via custom event — no prop drill)
   useEffect(() => {

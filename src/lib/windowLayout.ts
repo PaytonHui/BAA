@@ -55,8 +55,11 @@ export const CAL_LARGE_H = 752;
 export const CAL_VIEW_H = 448;
 export const CAL_VIEW_LARGE_H = 520;
 /** Fallback when form open (before ResizeObserver measures exact height) */
-export const CAL_FORM_H = 560;
-export const CAL_FORM_LARGE_H = 620;
+export const CAL_FORM_H = 640;
+export const CAL_FORM_LARGE_H = 720;
+/** Multi-day section + time wheel needs extra room when form is open */
+export const CAL_FORM_MULTI_H = 720;
+export const CAL_FORM_MULTI_LARGE_H = 800;
 
 /**
  * Function list is a SEPARATE floating window (like chat) so the pet

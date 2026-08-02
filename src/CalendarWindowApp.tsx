@@ -293,11 +293,11 @@ export default function CalendarWindowApp() {
   return (
     <MacWindowShell
       shownEvent="calendar-window-shown"
-      className="p-[18px] overflow-hidden h-full bg-transparent"
+      className="p-[18px] overflow-y-auto overflow-x-hidden h-full bg-transparent"
       forceInteractive
     >
-      {/* Top-align card; transparent shell — no full-height white stretch */}
-      <div className="flex flex-col h-full min-h-0 w-full items-stretch justify-start bg-transparent overflow-hidden">
+      {/* Top-align card; allow vertical scroll if window is still short after resize */}
+      <div className="flex flex-col min-h-0 w-full items-stretch justify-start bg-transparent">
         <CalendarPanel
           open
           events={events}

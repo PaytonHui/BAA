@@ -17,6 +17,8 @@ import { emit } from "@tauri-apps/api/event";
 import {
   CAL_FORM_H,
   CAL_FORM_LARGE_H,
+  CAL_FORM_MULTI_H,
+  CAL_FORM_MULTI_LARGE_H,
   CAL_LARGE_W,
   CAL_VIEW_H,
   CAL_VIEW_LARGE_H,
@@ -465,27 +467,48 @@ export async function resizePanelWindow(
 /**
  * Grow / shrink the calendar window so the Add plan composer fits fully.
  * Pass `contentHeight` from a measured card (ResizeObserver) to avoid white gap.
+ * `multiOpen` = multi-day range controls visible (extra height).
  */
 export async function resizeCalendarForComposer(
   formOpen: boolean,
   large: boolean,
-  contentHeight?: number
+  contentHeight?: number,
+  multiOpen = false
 ): Promise<void> {
   const fallback = formOpen
-    ? large
-      ? CAL_FORM_LARGE_H
-      : CAL_FORM_H
+    ? multiOpen
+      ? large
+        ? CAL_FORM_MULTI_LARGE_H
+        : CAL_FORM_MULTI_H
+      : large
+        ? CAL_FORM_LARGE_H
+        : CAL_FORM_H
     : large
       ? CAL_VIEW_LARGE_H
       : CAL_VIEW_H;
   // Measured panel height + small breathing room (not a huge pad)
   let contentH =
     typeof contentHeight === "number" && contentHeight > 120
-      ? Math.ceil(contentHeight) + 4
+      ? Math.ceil(contentHeight) + 8
       : fallback;
+  // When multi-day strip is open, never fall below multi fallback (clipped measure)
+  if (formOpen && multiOpen) {
+    contentH = Math.max(contentH, fallback);
+  }
   // Clamp so we don't create a huge empty transparent window
-  const maxH = formOpen ? (large ? 720 : 640) : large ? 560 : 500;
-  const minH = formOpen ? 420 : 360;
+  // Multi-day + time wheel is tall — allow up to ~screen-ish panel height
+  const maxH = formOpen
+    ? large
+      ? multiOpen
+        ? 920
+        : 800
+      : multiOpen
+        ? 860
+        : 740
+    : large
+      ? 560
+      : 500;
+  const minH = formOpen ? (multiOpen ? 520 : 420) : 360;
   contentH = Math.max(minH, Math.min(maxH, contentH));
 
   const { w, h } = withShadowPad(large ? CAL_LARGE_W : CAL_W, contentH);
