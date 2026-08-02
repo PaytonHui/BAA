@@ -66,6 +66,7 @@ import {
   repositionChatWindow,
   showChatWindow,
 } from "./lib/chatWindow";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   hideAllPanelWindows,
   hidePanelWindow,
@@ -662,7 +663,9 @@ export default function App() {
     }).then((u) => unsubs.push(u));
     void listen("calendar-closed", () => {
       setCalendarOpen(false);
+      calendarOpenRef.current = false;
       setCalendarLarge(false);
+      calendarLargeRef.current = false;
     }).then((u) => unsubs.push(u));
     void listen("color-closed", () => {
       setColorPickerOpen(false);
@@ -1498,10 +1501,38 @@ export default function App() {
   }, [colorPickerOpen, orbit]);
 
   const openCalendar = useCallback(async () => {
-    if (layoutBusyRef.current || calendarOpen) return;
+    if (layoutBusyRef.current) return;
+
+    // If React thinks calendar is open, verify the real OS window.
+    // Desync (state true / window hidden, or stuck invisible) is a common
+    // cause of “click lightstick, nothing shows”.
+    if (calendarOpenRef.current) {
+      try {
+        const win = await WebviewWindow.getByLabel("calendar");
+        const vis = win ? await win.isVisible().catch(() => false) : false;
+        if (win && vis) {
+          try {
+            await win.setFocus();
+            await win.setIgnoreCursorEvents(false);
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+      } catch {
+        /* fall through and force open */
+      }
+      calendarOpenRef.current = false;
+      setCalendarOpen(false);
+    }
+
     orbit.stop();
     layoutBusyRef.current = true;
     const gen = ++layoutGenRef.current;
+    // Failsafe: never leave layout permanently busy if something hangs
+    const busyFailsafe = window.setTimeout(() => {
+      if (gen === layoutGenRef.current) layoutBusyRef.current = false;
+    }, 4000);
     setMenuOpen(false);
     menuOpenRef.current = false;
 
@@ -1520,19 +1551,25 @@ export default function App() {
       await hidePanelWindow("settings");
       await hidePanelWindow("link");
       await hidePanelWindow("login");
+      // Always hide first so showPanelWindow runs the full show + enter path
+      // (avoids wasVisible + opacity-0 stuck state after rapid close/open).
+      await hidePanelWindow("calendar");
 
       await showPanelWindow("calendar", calendarLarge);
       if (gen !== layoutGenRef.current) return;
 
       setShell("compact");
       setCalendarOpen(true);
+      calendarOpenRef.current = true;
     } catch (e) {
       console.error(e);
       setCalendarOpen(false);
+      calendarOpenRef.current = false;
     } finally {
+      window.clearTimeout(busyFailsafe);
       if (gen === layoutGenRef.current) layoutBusyRef.current = false;
     }
-  }, [orbit, calendarOpen, calendarLarge, clearCareBubbleNow]);
+  }, [orbit, calendarLarge, clearCareBubbleNow]);
   openCalendarRef.current = () => {
     void openCalendar();
   };
@@ -2221,28 +2258,41 @@ export default function App() {
     // Free (no Grok): calendar. Upgraded: chat.
     // Do NOT open a panel while closing another.
     if (e.button === 0) {
-      if (loginOpen) {
+      if (loginOpenRef.current) {
         await closeGrokLogin();
         return;
       }
-      if (calendarOpen) {
-        // Calendar window: cancel Add/Edit composer if open, else close calendar
-        await emit("calendar-lightstick-tap", {}).catch(() => undefined);
-        return;
+      // Calendar: use ref + real visibility (React state alone races with hide)
+      if (calendarOpenRef.current) {
+        let vis = false;
+        try {
+          const win = await WebviewWindow.getByLabel("calendar");
+          vis = !!(win && (await win.isVisible().catch(() => false)));
+        } catch {
+          /* ignore */
+        }
+        if (vis) {
+          // Cancel Add/Edit if open, else close calendar
+          await emit("calendar-lightstick-tap", {}).catch(() => undefined);
+          return;
+        }
+        // State says open but window gone — recover and open
+        calendarOpenRef.current = false;
+        setCalendarOpen(false);
       }
-      if (colorPickerOpen) {
+      if (colorPickerOpenRef.current) {
         await closeColorPicker();
         return;
       }
-      if (settingsOpen) {
+      if (settingsOpenRef.current) {
         await closeSettings();
         return;
       }
-      if (linkOpen) {
+      if (linkOpenRef.current) {
         await closeLinkPhone();
         return;
       }
-      if (menuOpen || menuOpenRef.current) {
+      if (menuOpenRef.current) {
         await closeContextMenu();
         return;
       }

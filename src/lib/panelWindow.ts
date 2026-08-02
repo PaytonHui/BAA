@@ -272,30 +272,28 @@ export async function showPanelWindow(
   if (existing) {
     const wasVisible = await existing.isVisible().catch(() => false);
 
-    if (wasVisible) {
-      // Already on screen: only nudge frame + focus. Do NOT re-emit shown
-      // (that would play enter animation a second time).
-      try {
-        await existing.setSize(new LogicalSize(w, h));
-        await existing.setPosition(new LogicalPosition(x, y));
-        await existing.setFocus();
-      } catch {
-        /* ignore */
-      }
-      // Data refresh only (listeners that ignore animation)
-      await emit(`${kind}-window-data`, { large });
-      return;
-    }
-
-    // Was hidden → place while hidden, show once, then one enter signal
+    // Always place first (hidden or not)
     try {
       await existing.setSize(new LogicalSize(w, h));
       await existing.setPosition(new LogicalPosition(x, y));
     } catch {
       /* ignore */
     }
-    await existing.show();
+
+    if (wasVisible) {
+      // May still be visible while opacity-0 after a botched close/open race.
+      // Force a clean hide→show so enter animation always runs when main opens.
+      try {
+        await existing.hide();
+      } catch {
+        /* ignore */
+      }
+      // One frame so macOS commits hide before show
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
+
     try {
+      await existing.show();
       // Ensure clicks reach the webview after hide/show (macOS)
       await existing.setIgnoreCursorEvents(false);
       await existing.setAlwaysOnTop(true);
@@ -308,6 +306,7 @@ export async function showPanelWindow(
     }
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
     await emit(shown, { large });
+    await emit(`${kind}-window-data`, { large });
     // Late resize after enter animation starts (transparent webview paint)
     window.setTimeout(() => {
       void existing.setSize(new LogicalSize(w, h)).catch(() => undefined);

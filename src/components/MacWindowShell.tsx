@@ -82,9 +82,20 @@ export function MacWindowShell({
   const enterRafRef = useRef(0);
 
   const playEnter = useCallback(() => {
-    // Already opening or fully open this session → ignore (kills double-open)
-    if (openSessionRef.current) return;
-    if (phaseRef.current === "in" || phaseRef.current === "idle") return;
+    // Fully open already → ignore (kills double-open flash)
+    if (phaseRef.current === "in" || phaseRef.current === "idle") {
+      if (openSessionRef.current) return;
+    }
+    // Mid-enter (pre→in rAF) → ignore
+    if (openSessionRef.current && phaseRef.current === "pre") return;
+    // Mid-exit / stuck pre after hide: allow a fresh enter
+    if (phaseRef.current === "out" || !openSessionRef.current) {
+      if (exitTimerRef.current) {
+        window.clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = 0;
+      }
+      exitResolveRef.current = null;
+    }
 
     openSessionRef.current = true;
 
@@ -234,12 +245,14 @@ export function useMacWindowClose(emitClosed?: () => Promise<void> | void) {
         );
         window.setTimeout(resolve, MAC_WINDOW_OUT_MS + 50);
       });
-      await emitClosed?.();
+      // Hide BEFORE telling main "closed" so a rapid re-open never sees
+      // wasVisible=true with opacity-0 (stuck mac-window-pre) and skip enter.
       try {
         await getCurrentWindow().hide();
       } catch {
         /* ignore */
       }
+      await emitClosed?.();
     } finally {
       window.setTimeout(() => {
         closingRef.current = false;

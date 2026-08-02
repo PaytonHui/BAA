@@ -146,6 +146,8 @@ export default function CalendarWindowApp() {
     let unlisten: (() => void) | undefined;
     void listen("calendar-lightstick-tap", () => {
       if (formOpenRef.current) {
+        // Clear immediately so a quick second tap closes (don't wait for React)
+        formOpenRef.current = false;
         window.dispatchEvent(new CustomEvent("baa-cal-cancel-form"));
         return;
       }
