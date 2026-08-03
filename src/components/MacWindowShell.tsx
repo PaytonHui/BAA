@@ -81,20 +81,37 @@ export function MacWindowShell({
   const openSessionRef = useRef(false);
   const enterRafRef = useRef(0);
 
-  const playEnter = useCallback(() => {
-    // Fully open already → ignore (kills double-open flash)
-    if (phaseRef.current === "in" || phaseRef.current === "idle") {
-      if (openSessionRef.current) return;
-    }
-    // Mid-enter (pre→in rAF) → ignore
-    if (openSessionRef.current && phaseRef.current === "pre") return;
-    // Mid-exit / stuck pre after hide: allow a fresh enter
-    if (phaseRef.current === "out" || !openSessionRef.current) {
+  /**
+   * Start enter animation. Pass `force` when main re-shows the OS window so a
+   * stuck openSession+pre (opacity 0) never blocks the next open.
+   */
+  const playEnter = useCallback((force = false) => {
+    if (force) {
+      openSessionRef.current = false;
       if (exitTimerRef.current) {
         window.clearTimeout(exitTimerRef.current);
         exitTimerRef.current = 0;
       }
       exitResolveRef.current = null;
+      if (enterRafRef.current) {
+        cancelAnimationFrame(enterRafRef.current);
+        enterRafRef.current = 0;
+      }
+    } else {
+      // Fully open already → ignore (kills double-open flash)
+      if (phaseRef.current === "in" || phaseRef.current === "idle") {
+        if (openSessionRef.current) return;
+      }
+      // Mid-enter (pre→in rAF) → ignore
+      if (openSessionRef.current && phaseRef.current === "pre") return;
+      // Mid-exit / stuck pre after hide: allow a fresh enter
+      if (phaseRef.current === "out" || !openSessionRef.current) {
+        if (exitTimerRef.current) {
+          window.clearTimeout(exitTimerRef.current);
+          exitTimerRef.current = 0;
+        }
+        exitResolveRef.current = null;
+      }
     }
 
     openSessionRef.current = true;
@@ -152,10 +169,12 @@ export function MacWindowShell({
     return () => window.removeEventListener("baa-mac-window-exit", handler);
   }, [playExit]);
 
-  // Enter only once when main says the OS window is ready
+  // Enter when main says the OS window is ready.
+  // Always force on shown — hide without exit (or cancelled rAF) can leave
+  // openSession+pre, which would keep the panel at opacity 0 forever.
   useEffect(() => {
     if (!shownEvent) {
-      playEnter();
+      playEnter(true);
       return;
     }
 
@@ -164,7 +183,7 @@ export function MacWindowShell({
 
     void listen(shownEvent, () => {
       if (cancelled) return;
-      playEnter();
+      playEnter(true);
     }).then((fn) => {
       if (cancelled) {
         fn();
@@ -173,10 +192,10 @@ export function MacWindowShell({
       unlisten = fn;
     });
 
-    // If shown-event was missed (webview still booting), enter once — never twice
+    // If shown-event was missed (webview still booting), enter once
     const fallback = window.setTimeout(() => {
       if (phaseRef.current === "pre" && !openSessionRef.current) {
-        playEnter();
+        playEnter(true);
       }
     }, 280);
 
@@ -184,8 +203,16 @@ export function MacWindowShell({
       cancelled = true;
       unlisten?.();
       window.clearTimeout(fallback);
-      if (enterRafRef.current) cancelAnimationFrame(enterRafRef.current);
+      // Cancel pending frames but clear openSession so a later shown can enter.
+      // Leaving openSession=true after cancelling rAF was a common stuck path.
+      if (enterRafRef.current) {
+        cancelAnimationFrame(enterRafRef.current);
+        enterRafRef.current = 0;
+      }
       if (exitTimerRef.current) window.clearTimeout(exitTimerRef.current);
+      if (phaseRef.current === "pre") {
+        openSessionRef.current = false;
+      }
     };
   }, [shownEvent, playEnter]);
 
@@ -236,7 +263,16 @@ export function useMacWindowClose(emitClosed?: () => Promise<void> | void) {
   const closingRef = useRef(false);
 
   return useCallback(async () => {
-    if (closingRef.current) return;
+    // Allow re-entry if a previous close stalled mid-flight
+    if (closingRef.current) {
+      try {
+        await getCurrentWindow().hide();
+      } catch {
+        /* ignore */
+      }
+      await emitClosed?.();
+      return;
+    }
     closingRef.current = true;
     try {
       await new Promise<void>((resolve) => {

@@ -460,9 +460,6 @@ export function CalendarPanel({
           <p className="text-[13px] font-bold text-neutral-900 leading-tight truncate">
             Binky
           </p>
-          <p className="text-[10px] text-neutral-400 leading-none truncate">
-            {large ? "calendar · large" : "add plans free"}
-          </p>
         </div>
 
         {onToggleSize && (
@@ -549,13 +546,7 @@ export function CalendarPanel({
                 key={key}
                 type="button"
                 onClick={(e) => onDayClick(key, e)}
-                title={
-                  dayMark
-                    ? `${day} · ${dayMark.label}`
-                    : dayCats.length
-                      ? `${day} · ${dayCats.map((c) => CATEGORY_META[c].emoji + " " + CATEGORY_META[c].label).join(", ")}`
-                      : undefined
-                }
+                title={dayMark ? dayMark.label : undefined}
                 className={`relative ${dayH} rounded-md ${dayText} font-semibold transition border flex flex-col items-center justify-center gap-0 leading-none ${
                   isSel
                     ? "bg-[#B8EF9A] border-neutral-800/80 text-neutral-900 shadow-sm"
@@ -628,19 +619,6 @@ export function CalendarPanel({
             );
           })}
         </div>
-        {/* Tiny legend — hide while composing to save vertical space */}
-        {!addOpen && (
-          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-0.5 px-0.5 pt-1 pb-0.5">
-            {SCHEDULE_CATEGORIES.map((c) => (
-              <span
-                key={c}
-                className="text-[8px] font-medium text-neutral-500 tabular-nums"
-              >
-                {CATEGORY_META[c].emoji} {CATEGORY_META[c].label}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* Day events list — hidden while composing so form shows fully */}
@@ -648,10 +626,6 @@ export function CalendarPanel({
       <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-1.5 space-y-2 chat-scroll bg-[#F7F7F8]">
         <p className="text-[10px] font-semibold text-neutral-500 px-0.5">
           {selectedLabel}
-          <span className="font-normal text-neutral-400">
-            {" "}
-            · right-click a plan to edit
-          </span>
         </p>
 
         {dayEvents.length === 0 ? (
@@ -667,7 +641,7 @@ export function CalendarPanel({
                 Binky
               </p>
               <div className="max-w-[95%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)]">
-                No plans this day. Tap + Add plan below to create one.
+                No plans this day
               </div>
             </div>
           </div>
@@ -716,7 +690,6 @@ export function CalendarPanel({
                       }}
                       onDoubleClick={() => openEdit(ev)}
                       className="relative max-w-[90%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)] cursor-context-menu"
-                      title="Right-click to edit · double-click to edit"
                     >
                       <div className="flex items-center gap-1 flex-wrap">
                         {formatTimeRange(ev.time, ev.endTime) && (
@@ -730,9 +703,10 @@ export function CalendarPanel({
                           </span>
                         )}
                         <span
-                          className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full border ${meta.chip}`}
+                          className={`text-[11px] leading-none px-1.5 py-0.5 rounded-full border ${meta.chip}`}
+                          aria-label={meta.label}
                         >
-                          {meta.emoji} {meta.label} · {meta.leadHours}h
+                          {meta.emoji}
                         </span>
                       </div>
                       {ev.title}
@@ -984,18 +958,15 @@ export function CalendarPanel({
                       key={c}
                       type="button"
                       onClick={() => setCategory(c)}
-                      title={`${meta.label} · remind ${meta.leadHours}h before`}
+                      aria-label={meta.label}
                       className={`h-9 rounded-xl text-[10px] font-semibold border cursor-pointer flex flex-col items-center justify-center leading-tight transition ${
                         on
                           ? meta.chip + " shadow-sm"
                           : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
                       }`}
                     >
-                      <span className="text-[13px] leading-none">
+                      <span className="text-[15px] leading-none">
                         {meta.emoji}
-                      </span>
-                      <span className="text-[8px] mt-0.5 truncate max-w-full px-0.5">
-                        {meta.label}
                       </span>
                     </button>
                   );

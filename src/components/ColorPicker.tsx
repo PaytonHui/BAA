@@ -55,13 +55,9 @@ export function ColorPicker({
       </div>
 
       {locked && birthdayLock && (
-        <div className="mb-3 rounded-[14px] border border-black/[0.06] bg-black/[0.03] px-3 py-2.5 space-y-1">
+        <div className="mb-3 rounded-[14px] border border-black/[0.06] bg-black/[0.03] px-3 py-2.5">
           <p className="text-[13px] font-semibold text-[#1C1C1E] tracking-[-0.01em]">
-            {birthdayLock.heart} {birthdayLock.name}’s birthday
-          </p>
-          <p className="text-[11px] text-[#8E8E93] leading-snug">
-            Stick stays {birthdayLock.name}’s color all day. You can’t change it
-            until tomorrow.
+            {birthdayLock.heart} {birthdayLock.name}
           </p>
         </div>
       )}
@@ -131,7 +127,7 @@ export function ColorPicker({
           className="inline-block w-3.5 h-3.5 rounded-full border border-black/15 bg-[#E8ECF2]"
           aria-hidden
         />
-        {value === "off" ? "Light off · soft white" : "Turn off light"}
+        {value === "off" ? "Light off" : "Turn off light"}
       </button>
     </div>
   );

@@ -1500,30 +1500,42 @@ export default function App() {
     }
   }, [colorPickerOpen, orbit]);
 
-  const openCalendar = useCallback(async () => {
-    if (layoutBusyRef.current) return;
+  /** Clicks while layout is mid-flight — run after busy clears */
+  const pendingCalendarActionRef = useRef<"open" | "close" | null>(null);
 
-    // If React thinks calendar is open, verify the real OS window.
-    // Desync (state true / window hidden, or stuck invisible) is a common
-    // cause of “click lightstick, nothing shows”.
+  const closeCalendarHard = useCallback(async () => {
+    try {
+      await hidePanelWindow("calendar");
+    } catch {
+      /* ignore */
+    }
+    calendarOpenRef.current = false;
+    setCalendarOpen(false);
+    setCalendarLarge(false);
+    calendarLargeRef.current = false;
+  }, []);
+
+  const openCalendar = useCallback(async () => {
+    if (layoutBusyRef.current) {
+      pendingCalendarActionRef.current = "open";
+      return;
+    }
+
+    // Never "just focus" an already-visible calendar — that left opacity-0
+    // stuck panels looking like "click does nothing". Always hide→show so
+    // MacWindowShell gets a forced enter. Clear stale open flag if window gone.
     if (calendarOpenRef.current) {
       try {
         const win = await WebviewWindow.getByLabel("calendar");
         const vis = win ? await win.isVisible().catch(() => false) : false;
-        if (win && vis) {
-          try {
-            await win.setFocus();
-            await win.setIgnoreCursorEvents(false);
-          } catch {
-            /* ignore */
-          }
-          return;
+        if (!win || !vis) {
+          calendarOpenRef.current = false;
+          setCalendarOpen(false);
         }
       } catch {
-        /* fall through and force open */
+        calendarOpenRef.current = false;
+        setCalendarOpen(false);
       }
-      calendarOpenRef.current = false;
-      setCalendarOpen(false);
     }
 
     orbit.stop();
@@ -1556,7 +1568,11 @@ export default function App() {
       await hidePanelWindow("calendar");
 
       await showPanelWindow("calendar", calendarLarge);
-      if (gen !== layoutGenRef.current) return;
+      if (gen !== layoutGenRef.current) {
+        // Superseded by another layout op — don't leave an orphan visible panel
+        await hidePanelWindow("calendar").catch(() => undefined);
+        return;
+      }
 
       setShell("compact");
       setCalendarOpen(true);
@@ -1568,8 +1584,21 @@ export default function App() {
     } finally {
       window.clearTimeout(busyFailsafe);
       if (gen === layoutGenRef.current) layoutBusyRef.current = false;
+      const pending = pendingCalendarActionRef.current;
+      pendingCalendarActionRef.current = null;
+      if (pending === "close") {
+        // User clicked again while opening — close now
+        void (async () => {
+          await emit("calendar-lightstick-tap", {}).catch(() => undefined);
+          window.setTimeout(() => {
+            void closeCalendarHard();
+          }, 280);
+        })();
+      } else if (pending === "open" && !calendarOpenRef.current) {
+        void openCalendarRef.current();
+      }
     }
-  }, [orbit, calendarLarge, clearCareBubbleNow]);
+  }, [orbit, calendarLarge, clearCareBubbleNow, closeCalendarHard]);
   openCalendarRef.current = () => {
     void openCalendar();
   };
@@ -2168,7 +2197,8 @@ export default function App() {
 
     const dx = e.screenX - d.lastX;
     const dy = e.screenY - d.lastY;
-    if (!d.moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+    // Slightly loose so tiny hand jitter still counts as a click (toggle calendar)
+    if (!d.moved && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
 
     d.moved = true;
     d.lastX = e.screenX;
@@ -2263,7 +2293,7 @@ export default function App() {
         return;
       }
       // Calendar: use ref + real visibility (React state alone races with hide)
-      if (calendarOpenRef.current) {
+      {
         let vis = false;
         try {
           const win = await WebviewWindow.getByLabel("calendar");
@@ -2271,14 +2301,59 @@ export default function App() {
         } catch {
           /* ignore */
         }
-        if (vis) {
-          // Cancel Add/Edit if open, else close calendar
-          await emit("calendar-lightstick-tap", {}).catch(() => undefined);
-          return;
+        if (vis || calendarOpenRef.current) {
+          if (!vis) {
+            // State says open but window gone — recover and open
+            calendarOpenRef.current = false;
+            setCalendarOpen(false);
+          } else {
+            if (layoutBusyRef.current) {
+              pendingCalendarActionRef.current = "close";
+              return;
+            }
+            // Polite close (cancels Add/Edit if open). Calendar ACKs so we can
+            // force-hide if the webview is dead / stuck and never closes.
+            let result: "form-cancelled" | "closing" | null = null;
+            let unAck: (() => void) | undefined;
+            try {
+              unAck = await listen<{ action?: string }>(
+                "calendar-lightstick-result",
+                (ev) => {
+                  const a = ev.payload?.action;
+                  if (a === "form-cancelled" || a === "closing") result = a;
+                }
+              );
+            } catch {
+              /* ignore */
+            }
+            await emit("calendar-lightstick-tap", {}).catch(() => undefined);
+            // Wait briefly for ACK (form cancel vs close)
+            for (let i = 0; i < 12 && !result; i++) {
+              await new Promise<void>((r) => window.setTimeout(r, 16));
+            }
+            try {
+              unAck?.();
+            } catch {
+              /* ignore */
+            }
+            if (result === "form-cancelled") return;
+            // closing or no ACK — wait for exit anim, then ensure closed
+            if (result === "closing") {
+              await new Promise<void>((r) => window.setTimeout(r, 220));
+            }
+            try {
+              const win = await WebviewWindow.getByLabel("calendar");
+              const still =
+                win && (await win.isVisible().catch(() => false));
+              if (still || calendarOpenRef.current) {
+                await closeCalendarHard();
+              }
+            } catch {
+              await closeCalendarHard();
+            }
+            return;
+          }
         }
-        // State says open but window gone — recover and open
-        calendarOpenRef.current = false;
-        setCalendarOpen(false);
       }
       if (colorPickerOpenRef.current) {
         await closeColorPicker();

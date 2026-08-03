@@ -46,15 +46,12 @@ export default function GrokLoginWindowApp() {
       >
         <div className="flex items-center justify-between gap-2">
           <h2 className="text-[16px] font-semibold tracking-[-0.02em]">
-            Make Binky your AI assistant
+            AI assistant
           </h2>
           <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
             Coming soon
           </span>
         </div>
-        <p className="text-[12px] text-[#636366] leading-snug">
-          AI chat is coming soon. Use calendar and share for now.
-        </p>
         <button
           type="button"
           disabled

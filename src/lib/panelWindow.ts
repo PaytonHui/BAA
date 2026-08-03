@@ -270,8 +270,6 @@ export async function showPanelWindow(
 
   const existing = await WebviewWindow.getByLabel(label);
   if (existing) {
-    const wasVisible = await existing.isVisible().catch(() => false);
-
     // Always place first (hidden or not)
     try {
       await existing.setSize(new LogicalSize(w, h));
@@ -280,17 +278,14 @@ export async function showPanelWindow(
       /* ignore */
     }
 
-    if (wasVisible) {
-      // May still be visible while opacity-0 after a botched close/open race.
-      // Force a clean hide→show so enter animation always runs when main opens.
-      try {
-        await existing.hide();
-      } catch {
-        /* ignore */
-      }
-      // One frame so macOS commits hide before show
-      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    // Always hide→show so macOS commits a fresh frame and the panel shell
+    // always receives a forced enter (opacity-0 stuck state after races).
+    try {
+      await existing.hide();
+    } catch {
+      /* ignore */
     }
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
 
     try {
       await existing.show();

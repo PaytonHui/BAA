@@ -152,10 +152,6 @@ export function SettingsModal({
         <p className="text-[14px] font-semibold tracking-[-0.01em] text-[#1C1C1E]">
           You {USER_BUNNY}
         </p>
-        <p className="text-[12px] text-[#8E8E93] leading-snug">
-          Your birthday is marked with a bunny on the calendar. On that day
-          Binky celebrates with bunnies and your fave’s color.
-        </p>
 
         <div className="space-y-1.5">
           <p className="text-[12px] font-semibold text-[#636366]">Birthday</p>
@@ -199,9 +195,8 @@ export function SettingsModal({
           </div>
           {profile.birthdayMonth != null && profile.birthdayDay != null && (
             <p className="text-[11px] text-[#007AFF] font-medium">
-              {USER_BUNNY}{" "}
-              {MONTHS[profile.birthdayMonth - 1]} {profile.birthdayDay} · marked
-              on calendar
+              {USER_BUNNY} {MONTHS[profile.birthdayMonth - 1]}{" "}
+              {profile.birthdayDay}
             </p>
           )}
         </div>
@@ -241,16 +236,12 @@ export function SettingsModal({
       <div className="baa-ios-card px-3.5 py-3 space-y-2.5 opacity-90">
         <div className="flex items-center justify-between gap-2">
           <p className="text-[14px] font-semibold tracking-[-0.01em] text-[#1C1C1E]">
-            Make Binky your AI assistant
+            AI assistant
           </p>
           <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
             Coming soon
           </span>
         </div>
-        <p className="text-[12px] text-[#8E8E93] leading-snug">
-          Soon: chat with Binky as your AI assistant. For now, use calendar, Add
-          plan, and share.
-        </p>
         <button
           type="button"
           disabled

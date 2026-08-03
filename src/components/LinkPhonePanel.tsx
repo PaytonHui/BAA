@@ -87,13 +87,9 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
           Done
         </button>
       </div>
-      <p className="text-[12px] text-[#8E8E93] leading-snug">
-        Add plans in Calendar first, then sync to Mac calendar{" "}
-        <span className="font-semibold text-[#1C1C1E]">BAA</span>.
-      </p>
       <p className="text-[13px] text-[#3A3A3C]">
         <span className="font-semibold text-[#007AFF]">{events.length}</span>{" "}
-        event{events.length === 1 ? "" : "s"} ready
+        event{events.length === 1 ? "" : "s"}
       </p>
       <button
         type="button"

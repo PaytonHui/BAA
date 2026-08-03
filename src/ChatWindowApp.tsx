@@ -688,16 +688,12 @@ export default function ChatWindowApp() {
           >
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-[16px] font-semibold tracking-[-0.02em] leading-snug">
-                Make Binky your AI assistant
+                AI assistant
               </h2>
               <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
                 Coming soon
               </span>
             </div>
-            <p className="text-[12px] text-[#636366] leading-snug">
-              Chat with Binky as your AI assistant is on the way. For now, use
-              the calendar — add plans yourself and Sync to Calendar.
-            </p>
             <button
               type="button"
               disabled

@@ -67,22 +67,8 @@ export function GrokLoginForm({
             compact ? "text-[15px]" : "text-[16px]"
           }`}
         >
-          Make Binky your AI assistant
+          AI assistant
         </h2>
-        <p className="text-[11px] text-[#636366] leading-snug">
-          Powered by{" "}
-          <span className="font-semibold text-[#007AFF]">Grok</span> (basic —
-          not 4.5). Chat with Binky, get answers, and mark your calendar by
-          talking.
-        </p>
-        <p className="text-[10px] text-[#8E8E93] leading-snug">
-          Calendar stays free without login. Key from{" "}
-          <span className="font-medium text-[#636366]">
-            console.x.ai → API Keys
-          </span>{" "}
-          (<span className="font-mono text-[10px]">xai-</span>
-          …). Needs credits.
-        </p>
       </div>
 
       <label className="block space-y-1">

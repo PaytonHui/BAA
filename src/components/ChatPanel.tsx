@@ -211,14 +211,11 @@ export function ChatPanel({
           <p className="text-[13px] font-bold text-neutral-900 leading-tight truncate">
             Binky
           </p>
-          {/* whitespace-nowrap + no truncate cut so "typing…" is fully visible */}
-          <p
-            className={`text-[10px] leading-snug whitespace-nowrap ${
-              loading ? "text-[#5B8DEF] font-medium" : "text-neutral-400"
-            }`}
-          >
-            {loading ? "typing…" : large ? "large chat" : "online"}
-          </p>
+          {loading && (
+            <p className="text-[10px] leading-snug whitespace-nowrap text-[#5B8DEF] font-medium">
+              typing…
+            </p>
+          )}
         </div>
 
         {onToggleSize && !loading && (

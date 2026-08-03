@@ -141,7 +141,8 @@ export default function CalendarWindowApp() {
     await emit("calendar-closed", {}).catch(() => undefined);
   });
 
-  // Lightstick tap: cancel Add/Edit composer if open, otherwise close calendar
+  // Lightstick tap: cancel Add/Edit composer if open, otherwise close calendar.
+  // Always ACK so main can force-hide if this webview is stuck / late.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen("calendar-lightstick-tap", () => {
@@ -149,8 +150,14 @@ export default function CalendarWindowApp() {
         // Clear immediately so a quick second tap closes (don't wait for React)
         formOpenRef.current = false;
         window.dispatchEvent(new CustomEvent("baa-cal-cancel-form"));
+        void emit("calendar-lightstick-result", {
+          action: "form-cancelled",
+        }).catch(() => undefined);
         return;
       }
+      void emit("calendar-lightstick-result", { action: "closing" }).catch(
+        () => undefined
+      );
       void close();
     }).then((fn) => {
       unlisten = fn;
