@@ -270,51 +270,39 @@ export async function showPanelWindow(
 
   const existing = await WebviewWindow.getByLabel(label);
   if (existing) {
-    // Always place first (hidden or not)
-    try {
-      await existing.setSize(new LogicalSize(w, h));
-      await existing.setPosition(new LogicalPosition(x, y));
-    } catch {
-      /* ignore */
-    }
-
-    // Always hide→show so macOS commits a fresh frame and the panel shell
-    // always receives a forced enter (opacity-0 stuck state after races).
+    // Place once while hidden — no setPosition/setSize after show (those
+    // jump the OS window mid-fade and read as a shake).
     try {
       await existing.hide();
     } catch {
       /* ignore */
     }
+    try {
+      await existing.setSize(new LogicalSize(w, h));
+      await existing.setPosition(new LogicalPosition(x, y));
+    } catch {
+      /* ignore */
+    }
+    // One frame so macOS commits size/pos before visible
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
 
     try {
       await existing.show();
-      // Ensure clicks reach the webview after hide/show (macOS)
       await existing.setIgnoreCursorEvents(false);
       await existing.setAlwaysOnTop(true);
       await existing.setVisibleOnAllWorkspaces(true);
-      // Re-apply size after show — kills white strip under transparent panels
-      await existing.setSize(new LogicalSize(w, h));
-      await existing.setPosition(new LogicalPosition(x, y));
     } catch {
       /* ignore */
     }
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
     await emit(shown, { large });
     await emit(`${kind}-window-data`, { large });
-    // Late resize after enter animation starts (transparent webview paint)
+    // After enter fade settles: size re-assert only (no move) + focus
     window.setTimeout(() => {
       void existing.setSize(new LogicalSize(w, h)).catch(() => undefined);
       void existing.setIgnoreCursorEvents(false).catch(() => undefined);
-    }, 80);
-    window.setTimeout(() => {
-      void existing.setSize(new LogicalSize(w, h)).catch(() => undefined);
-    }, 280);
-    try {
-      await existing.setFocus();
-    } catch {
-      /* ignore */
-    }
+      void existing.setFocus().catch(() => undefined);
+    }, 180);
     return;
   }
 
@@ -360,8 +348,6 @@ export async function showPanelWindow(
     await win.setIgnoreCursorEvents(false);
     await win.setAlwaysOnTop(true);
     await win.setVisibleOnAllWorkspaces(true);
-    // Re-assert size after show (macOS transparent webview quirk)
-    await win.setSize(new LogicalSize(w, h));
   } catch {
     /* best-effort show */
   }
@@ -369,18 +355,12 @@ export async function showPanelWindow(
   // Give the webview a moment to mount listeners, then fire ONE enter
   await new Promise<void>((r) => window.setTimeout(r, 50));
   await emit(shown, { large });
+  // After fade: size only (no second setPosition — avoids open shake)
   window.setTimeout(() => {
     void win.setSize(new LogicalSize(w, h)).catch(() => undefined);
     void win.setIgnoreCursorEvents(false).catch(() => undefined);
-  }, 80);
-  window.setTimeout(() => {
-    void win.setSize(new LogicalSize(w, h)).catch(() => undefined);
-  }, 280);
-  try {
-    await win.setFocus();
-  } catch {
-    /* ignore */
-  }
+    void win.setFocus().catch(() => undefined);
+  }, 180);
 }
 
 export async function hidePanelWindow(kind: PanelKind): Promise<void> {

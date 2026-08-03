@@ -114,14 +114,15 @@ textarea {
 }
 
 /*
-  macOS-style floating window motion
-  — opacity + tiny scale only (NO filter/blur — blur causes open jitter)
+  Floating panel open/close
+  — opacity only (no translate/scale: those read as a shake on the lightstick open)
+  — no filter/blur (causes open jitter on transparent macOS webviews)
 */
 :root {
-  --mac-window-in-ms: 240ms;
-  --mac-window-out-ms: 160ms;
-  --mac-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --mac-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --mac-window-in-ms: 160ms;
+  --mac-window-out-ms: 120ms;
+  --mac-ease-out: ease-out;
+  --mac-ease-in: ease-in;
 }
 
 .mac-window-root {
@@ -138,40 +139,32 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  transform-origin: 50% 50%;
-  /* Compositor-only props — no filter */
-  will-change: transform, opacity;
+  will-change: opacity;
   backface-visibility: hidden;
-  transform: translateZ(0);
   -webkit-font-smoothing: antialiased;
 }
 
 /* Hidden until enter starts (after native window is placed) */
 .mac-window-pre {
   opacity: 0;
-  transform: translate3d(0, 6px, 0) scale(0.97);
   pointer-events: none;
 }
 
 @keyframes mac-window-in {
   0% {
     opacity: 0;
-    transform: translate3d(0, 6px, 0) scale(0.97);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
   }
 }
 
 @keyframes mac-window-out {
   0% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
   }
   100% {
     opacity: 0;
-    transform: translate3d(0, 4px, 0) scale(0.98);
   }
 }
 
@@ -186,7 +179,6 @@ textarea {
 
 .mac-window-idle {
   opacity: 1;
-  transform: translate3d(0, 0, 0) scale(1);
   will-change: auto;
 }
 

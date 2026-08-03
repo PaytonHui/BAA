@@ -10,8 +10,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePanelClickThrough } from "../hooks/usePanelClickThrough";
 
 /** Keep in sync with CSS --mac-window-in-ms / --mac-window-out-ms */
-export const MAC_WINDOW_IN_MS = 260;
-export const MAC_WINDOW_OUT_MS = 160;
+export const MAC_WINDOW_IN_MS = 160;
+export const MAC_WINDOW_OUT_MS = 120;
 
 export function sleep(ms: number) {
   return new Promise<void>((r) => window.setTimeout(r, ms));
