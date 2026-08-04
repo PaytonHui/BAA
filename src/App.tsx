@@ -202,6 +202,21 @@ export default function App() {
       void publishScheduleToCompanion(events);
     })();
   }, []);
+
+  // Flush plans to disk on quit — only if we have plans in memory
+  useEffect(() => {
+    const flush = () => {
+      const list = loadSchedule();
+      if (!list.length) return;
+      void flushScheduleToDisk().catch(() => undefined);
+    };
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+    };
+  }, []);
   const [lightColor, setLightColor] = useState<LightColorMode>(() =>
     typeof window !== "undefined" ? loadLightColorMode() : "cycle"
   );
@@ -1521,27 +1536,15 @@ export default function App() {
       return;
     }
 
-    // Never "just focus" an already-visible calendar — that left opacity-0
-    // stuck panels looking like "click does nothing". Always hide→show so
-    // MacWindowShell gets a forced enter. Clear stale open flag if window gone.
+    // Stale flag only — don't block open with extra visibility IPC
     if (calendarOpenRef.current) {
-      try {
-        const win = await WebviewWindow.getByLabel("calendar");
-        const vis = win ? await win.isVisible().catch(() => false) : false;
-        if (!win || !vis) {
-          calendarOpenRef.current = false;
-          setCalendarOpen(false);
-        }
-      } catch {
-        calendarOpenRef.current = false;
-        setCalendarOpen(false);
-      }
+      calendarOpenRef.current = false;
+      setCalendarOpen(false);
     }
 
     orbit.stop();
     layoutBusyRef.current = true;
     const gen = ++layoutGenRef.current;
-    // Failsafe: never leave layout permanently busy if something hangs
     const busyFailsafe = window.setTimeout(() => {
       if (gen === layoutGenRef.current) layoutBusyRef.current = false;
     }, 4000);
@@ -1549,27 +1552,29 @@ export default function App() {
     menuOpenRef.current = false;
 
     try {
-      await clearCareBubbleNow();
-
       chatOpenRef.current = false;
       setChatOpen(false);
       setColorPickerOpen(false);
       setSettingsOpen(false);
       setLinkOpen(false);
       setLoginOpen(false);
-      await hideChatWindow();
-      await hidePanelWindow("menu");
-      await hidePanelWindow("color");
-      await hidePanelWindow("settings");
-      await hidePanelWindow("link");
-      await hidePanelWindow("login");
-      // Always hide first so showPanelWindow runs the full show + enter path
-      // (avoids wasVisible + opacity-0 stuck state after rapid close/open).
-      await hidePanelWindow("calendar");
 
+      // Close other panels + care in parallel (don’t wait on calendar hide)
+      await Promise.all([
+        clearCareBubbleNow(),
+        hideChatWindow(),
+        hidePanelWindow("menu"),
+        hidePanelWindow("color"),
+        hidePanelWindow("settings"),
+        hidePanelWindow("link"),
+        hidePanelWindow("login"),
+      ]);
+
+      if (gen !== layoutGenRef.current) return;
+
+      // Fast path: place + show (no pre-hide thrash when already closed)
       await showPanelWindow("calendar", calendarLarge);
       if (gen !== layoutGenRef.current) {
-        // Superseded by another layout op — don't leave an orphan visible panel
         await hidePanelWindow("calendar").catch(() => undefined);
         return;
       }
@@ -1587,12 +1592,11 @@ export default function App() {
       const pending = pendingCalendarActionRef.current;
       pendingCalendarActionRef.current = null;
       if (pending === "close") {
-        // User clicked again while opening — close now
         void (async () => {
           await emit("calendar-lightstick-tap", {}).catch(() => undefined);
           window.setTimeout(() => {
             void closeCalendarHard();
-          }, 280);
+          }, 120);
         })();
       } else if (pending === "open" && !calendarOpenRef.current) {
         void openCalendarRef.current();

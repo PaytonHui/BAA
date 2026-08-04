@@ -135,12 +135,10 @@ pub fn load_schedule() -> Result<Vec<ScheduleEventDto>, String> {
     if raw.trim().is_empty() {
         return Ok(vec![]);
     }
-    let events: Vec<ScheduleEventDto> =
+    // Prefer lenient parse (same as save path) so older / messy JSON still loads
+    let value: serde_json::Value =
         serde_json::from_str(&raw).map_err(|e| format!("schedule parse: {e}"))?;
-    Ok(events
-        .into_iter()
-        .filter(|e| !e.id.is_empty() && !e.date.is_empty() && !e.title.is_empty())
-        .collect())
+    Ok(parse_event_list(value))
 }
 
 fn parse_event_list(events: serde_json::Value) -> Vec<ScheduleEventDto> {
@@ -165,10 +163,25 @@ fn parse_event_list(events: serde_json::Value) -> Vec<ScheduleEventDto> {
 }
 
 fn write_schedule_list(list: &[ScheduleEventDto]) -> Result<usize, String> {
-    if list.is_empty() {
-        return Err("save_schedule: no valid events in payload".into());
-    }
     let path = schedule_path()?;
+    // Never wipe a non-empty schedule with an empty payload (partial UI / race).
+    // True "delete all" is rare; user can clear from a full loaded list later.
+    if list.is_empty() {
+        if path.exists() {
+            let existing = fs::read_to_string(&path).unwrap_or_default();
+            if existing.trim().len() > 4 {
+                eprintln!(
+                    "[baa] refuse empty save_schedule — keeping existing {}",
+                    path.display()
+                );
+                return Err(
+                    "save_schedule: refusing to overwrite non-empty schedule with empty list"
+                        .into(),
+                );
+            }
+        }
+        // File missing or already [] — ok to write []
+    }
     let raw = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, &raw).map_err(|e| format!("write tmp: {e}"))?;
@@ -220,12 +233,75 @@ pub fn save_schedule(events: serde_json::Value) -> Result<usize, String> {
 }
 
 /// Same as save_schedule but takes a raw JSON string — use from frontend for reliability.
+/// Always writes bytes when payload looks non-empty (even if JSON parse is fussy).
 #[tauri::command]
 pub fn save_schedule_json(json: String) -> Result<usize, String> {
-    let value: serde_json::Value =
-        serde_json::from_str(&json).map_err(|e| format!("save_schedule_json parse: {e}"))?;
-    let list = parse_event_list(value);
-    write_schedule_list(&list)
+    let trimmed = json.trim();
+    eprintln!(
+        "[baa] save_schedule_json recv bytes={} head={:?}",
+        trimmed.len(),
+        trimmed.chars().take(60).collect::<String>()
+    );
+    if trimmed.is_empty() || trimmed == "[]" || trimmed == "null" {
+        return Err("save_schedule_json: empty payload".into());
+    }
+    if !trimmed.starts_with('[') {
+        return Err(format!(
+            "save_schedule_json: expected JSON array, got head {:?}",
+            trimmed.chars().take(20).collect::<String>()
+        ));
+    }
+
+    let path = schedule_path()?;
+    let tmp = path.with_extension("json.tmp");
+
+    let (out, arr_len): (String, usize) =
+        match serde_json::from_str::<serde_json::Value>(trimmed) {
+            Ok(value) => {
+                let n = value.as_array().map(|a| a.len()).unwrap_or(0);
+                if n == 0 {
+                    return Err("save_schedule_json: empty array".into());
+                }
+                let pretty =
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| trimmed.to_string());
+                (pretty, n)
+            }
+            Err(e) => {
+                // Still persist raw bytes — better than losing plans
+                eprintln!("[baa] save_schedule_json parse warn: {e} — writing raw");
+                let n = trimmed.matches("\"id\"").count().max(1);
+                (trimmed.to_string(), n)
+            }
+        };
+
+    fs::write(&tmp, out.as_bytes()).map_err(|e| format!("write tmp: {e}"))?;
+    if fs::rename(&tmp, &path).is_err() {
+        fs::write(&path, out.as_bytes()).map_err(|e| format!("write path: {e}"))?;
+        let _ = fs::remove_file(&tmp);
+    }
+
+    eprintln!(
+        "[baa] save_schedule_json OK wrote {} events → {}",
+        arr_len,
+        path.display()
+    );
+    if let Ok(dir) = baa_dir() {
+        let line = format!(
+            "{} wrote {} events → {}\n",
+            chrono_like_now(),
+            arr_len,
+            path.display()
+        );
+        let _ = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("save-debug.log"))
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(line.as_bytes())
+            });
+    }
+    Ok(arr_len)
 }
 
 /// Load reminder-sent map (eventId → timestamp) so we don't re-chime after relaunch.

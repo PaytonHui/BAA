@@ -254,9 +254,9 @@ export default function ChatWindowApp() {
       const { remaining, removed } = applyScheduleCancels(prev, cancels);
       if (!removed.length) return [];
       try {
-        await saveScheduleAsync(remaining);
+        await saveScheduleAsync(remaining, "replace");
       } catch {
-        saveSchedule(remaining);
+        saveSchedule(remaining, "replace");
       }
       void emit("schedule-updated", {}).catch(() => undefined);
       return removed;

@@ -115,12 +115,13 @@ textarea {
 
 /*
   Floating panel open/close
-  — opacity only (no translate/scale: those read as a shake on the lightstick open)
-  — no filter/blur (causes open jitter on transparent macOS webviews)
+  — blank (pre) while OS window is hidden / placing
+  — snap to visible only after shown event (avoids macOS transparent afterimage)
+  — no fade out (fade left a ghost on transparent webviews)
 */
 :root {
-  --mac-window-in-ms: 160ms;
-  --mac-window-out-ms: 120ms;
+  --mac-window-in-ms: 0ms;
+  --mac-window-out-ms: 0ms;
   --mac-ease-out: ease-out;
   --mac-ease-in: ease-in;
 }
@@ -131,6 +132,9 @@ textarea {
   display: flex;
   align-items: flex-start;
   justify-content: center;
+  /* Isolate compositing so panel paint doesn't ghost into the desktop */
+  isolation: isolate;
+  transform: translateZ(0);
 }
 
 .mac-window-surface {
@@ -139,47 +143,29 @@ textarea {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  will-change: opacity;
   backface-visibility: hidden;
   -webkit-font-smoothing: antialiased;
+  transform: translateZ(0);
 }
 
-/* Hidden until enter starts (after native window is placed) */
+/* Fully blank — used while hidden and for one frame after re-show */
 .mac-window-pre {
-  opacity: 0;
+  opacity: 0 !important;
+  visibility: hidden;
   pointer-events: none;
 }
 
-@keyframes mac-window-in {
-  0% {
-    opacity: 0;
-  }
-  100% {
-    opacity: 1;
-  }
-}
-
-@keyframes mac-window-out {
-  0% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-  }
-}
-
-.mac-window-in {
-  animation: mac-window-in var(--mac-window-in-ms) var(--mac-ease-out) both;
+/* Visible — no transition (transitions cause trails on transparent macOS windows) */
+.mac-window-in,
+.mac-window-idle {
+  opacity: 1;
+  visibility: visible;
 }
 
 .mac-window-out {
-  animation: mac-window-out var(--mac-window-out-ms) var(--mac-ease-in) both;
+  opacity: 0 !important;
+  visibility: hidden;
   pointer-events: none;
-}
-
-.mac-window-idle {
-  opacity: 1;
-  will-change: auto;
 }
 
 /*

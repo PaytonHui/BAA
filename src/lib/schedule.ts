@@ -217,37 +217,31 @@ let hydratePromise: Promise<ScheduleEvent[]> | null = null;
 let scheduleWriteGen = 0;
 
 /**
- * Keep memory-only rows that disk has not caught up with yet (async save race).
- * Without this, “+ Add plan” → emit → reloadFromDisk can wipe the new event.
+ * Merge event lists by id. Prefer higher createdAt (newer edit wins).
+ * Never drops an id that exists only on one side — prevents partial UI saves
+ * from wiping disk plans on quit/relaunch.
  */
-function mergePendingMemory(
-  disk: ScheduleEvent[],
-  mem: ScheduleEvent[] | null
+function mergeByIdPreferNewer(
+  ...lists: Array<ScheduleEvent[] | null | undefined>
 ): ScheduleEvent[] {
-  if (!mem?.length) return disk;
   const byId = new Map<string, ScheduleEvent>();
-  for (const e of disk) byId.set(e.id, e);
-  for (const e of mem) {
-    if (e.id.startsWith("baa-default:")) continue;
-    const d = byId.get(e.id);
-    if (!d) {
-      byId.set(e.id, e);
-      continue;
-    }
-    // Prefer the side that was updated more recently
-    if ((e.createdAt || 0) >= (d.createdAt || 0)) {
-      byId.set(e.id, { ...d, ...e, id: e.id });
-    }
-  }
-  // Preserve disk order, then append brand-new mem ids
-  const diskIds = new Set(disk.map((e) => e.id));
-  const out = disk.map((e) => byId.get(e.id) ?? e);
-  for (const e of mem) {
-    if (!diskIds.has(e.id) && !e.id.startsWith("baa-default:")) {
-      out.push(byId.get(e.id) ?? e);
+  const order: string[] = [];
+  for (const list of lists) {
+    if (!list?.length) continue;
+    for (const e of list) {
+      if (!e?.id || !e.date || !e.title) continue;
+      const prev = byId.get(e.id);
+      if (!prev) {
+        byId.set(e.id, e);
+        order.push(e.id);
+        continue;
+      }
+      if ((e.createdAt || 0) >= (prev.createdAt || 0)) {
+        byId.set(e.id, { ...prev, ...e, id: e.id });
+      }
     }
   }
-  return out;
+  return order.map((id) => byId.get(id)!).filter(Boolean);
 }
 
 function normalizeList(raw: unknown): ScheduleEvent[] {
@@ -335,17 +329,23 @@ export function loadSchedule(): ScheduleEvent[] {
   return local;
 }
 
+/** Strip lone UTF-16 surrogates that break JSON / Rust serde (emoji edge cases). */
+function sanitizeText(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
+}
+
 /** Wire shape for Rust save_schedule (always JSON-safe). */
 function toDiskPayload(events: ScheduleEvent[]) {
   return events.map((e) => ({
-    id: String(e.id),
-    date: String(e.date),
-    title: String(e.title),
-    time: e.time ? String(e.time) : null,
-    endTime: e.endTime ? String(e.endTime) : null,
-    endDate: e.endDate ? String(e.endDate) : null,
-    note: e.note ? String(e.note) : null,
-    category: e.category ? String(e.category) : null,
+    id: sanitizeText(String(e.id)),
+    date: sanitizeText(String(e.date)),
+    title: sanitizeText(String(e.title)),
+    time: e.time ? sanitizeText(String(e.time)) : null,
+    endTime: e.endTime ? sanitizeText(String(e.endTime)) : null,
+    endDate: e.endDate ? sanitizeText(String(e.endDate)) : null,
+    note: e.note ? sanitizeText(String(e.note)) : null,
+    category: e.category ? sanitizeText(String(e.category)) : null,
     createdAt:
       typeof e.createdAt === "number" && Number.isFinite(e.createdAt)
         ? Math.floor(e.createdAt)
@@ -354,44 +354,109 @@ function toDiskPayload(events: ScheduleEvent[]) {
 }
 
 async function invokeSaveToDisk(events: ScheduleEvent[]): Promise<number> {
+  if (!events.length) {
+    console.warn("[schedule] invokeSaveToDisk skipped — empty list");
+    return 0;
+  }
   const payload = toDiskPayload(events);
   const json = JSON.stringify(payload);
-  // Prefer JSON-string command — most reliable across Tauri IPC / multi-window
+  console.log(
+    `[schedule] saving ${events.length} events to disk (${json.length} bytes)`
+  );
+  // Only use the JSON-string command — array IPC was parsing to 0 events.
   try {
-    return await invoke<number>("save_schedule_json", { json });
+    const n = await invoke<number>("save_schedule_json", { json });
+    console.log(`[schedule] disk save ok (${n})`);
+    return n;
   } catch (e1) {
-    console.warn("[schedule] save_schedule_json failed, fallback", e1);
-    try {
-      return await invoke<number>("save_schedule", { events: payload });
-    } catch (e2) {
-      // Last resort: pass the array as a JSON string inside `events`
-      return await invoke<number>("save_schedule", { events: json });
-    }
+    console.error("[schedule] save_schedule_json failed", e1);
+    throw e1;
+  }
+}
+
+/** Load disk list (empty if unavailable). */
+async function loadDiskList(): Promise<ScheduleEvent[]> {
+  if (!isTauri()) return [];
+  try {
+    return normalizeList(
+      await Promise.race([
+        invoke<unknown>("load_schedule"),
+        new Promise<never>((_, rej) =>
+          window.setTimeout(
+            () => rej(new Error("load_schedule timed out")),
+            4000
+          )
+        ),
+      ])
+    );
+  } catch {
+    return [];
   }
 }
 
 /**
- * Persist schedule to memory + localStorage + disk (survives quit).
- * Fire-and-forget disk write (ok for UI toggles).
+ * Union current UI list with disk so a partial window never overwrites
+ * other plans when saving (add/update).
  */
-export function saveSchedule(events: ScheduleEvent[]) {
+async function unionWithDisk(events: ScheduleEvent[]): Promise<ScheduleEvent[]> {
+  const disk = await loadDiskList();
+  const local = readLocalStorage();
+  return mergeByIdPreferNewer(disk, local, events, memoryCache);
+}
+
+export type ScheduleSaveMode = "merge" | "replace";
+
+/**
+ * Persist schedule to memory + localStorage + disk (survives quit).
+ * Fire-and-forget disk write (merges with disk first — safe for add).
+ */
+export function saveSchedule(
+  events: ScheduleEvent[],
+  mode: ScheduleSaveMode = "merge"
+) {
   scheduleWriteGen += 1;
   memoryCache = events;
   writeLocalStorage(events);
-  // Always attempt disk write — never skip just because isTauri() is flaky
-  void invokeSaveToDisk(events).catch((e) => {
+  void saveScheduleAsync(events, mode).catch((e) => {
     console.error("[schedule] disk save failed", e);
   });
 }
 
-/** Await disk write — use after chat marks so calendar reload sees data. */
-export async function saveScheduleAsync(events: ScheduleEvent[]) {
+/**
+ * Await disk write.
+ * - `merge` (default): union with disk/local so a partial UI list cannot wipe plans
+ * - `replace`: write this list as authority (use for delete after a full load)
+ */
+export async function saveScheduleAsync(
+  events: ScheduleEvent[],
+  mode: ScheduleSaveMode = "merge"
+) {
   const gen = ++scheduleWriteGen;
   memoryCache = events;
   writeLocalStorage(events);
   try {
+    let toWrite =
+      mode === "replace"
+        ? mergeByIdPreferNewer(events)
+        : await unionWithDisk(events);
+    // If a newer write landed while we merged, prefer that memory
+    if (scheduleWriteGen !== gen && memoryCache) {
+      toWrite =
+        mode === "replace"
+          ? memoryCache
+          : mergeByIdPreferNewer(toWrite, memoryCache);
+    }
+    memoryCache = toWrite;
+    writeLocalStorage(toWrite);
+
+    // Never write [] over real data (race: flush before hydrate)
+    if (toWrite.length === 0) {
+      console.warn("[schedule] refuse empty save");
+      return 0;
+    }
+
     const n = await Promise.race([
-      invokeSaveToDisk(events),
+      invokeSaveToDisk(toWrite),
       new Promise<never>((_, rej) =>
         window.setTimeout(
           () => rej(new Error("save_schedule timed out")),
@@ -401,9 +466,9 @@ export async function saveScheduleAsync(events: ScheduleEvent[]) {
     ]);
     // Verify every user plan id is on disk
     try {
-      const disk = normalizeList(await invoke<unknown>("load_schedule"));
+      const disk = await loadDiskList();
       const diskIds = new Set(disk.map((e) => e.id));
-      const missing = events.filter(
+      const missing = toWrite.filter(
         (e) =>
           !e.id.startsWith("baa-default:") &&
           !!e.title?.trim() &&
@@ -415,13 +480,19 @@ export async function saveScheduleAsync(events: ScheduleEvent[]) {
           `[schedule] disk missing ${missing.length} id(s), rewriting full list`,
           missing.map((m) => m.title)
         );
-        await invokeSaveToDisk(events);
+        const again =
+          mode === "replace"
+            ? toWrite
+            : mergeByIdPreferNewer(disk, toWrite);
+        await invokeSaveToDisk(again);
+        memoryCache = again;
+        writeLocalStorage(again);
       }
     } catch {
       /* verify optional */
     }
-    console.log(`[schedule] disk save ok (${n} events)`);
-    void gen;
+    console.log(`[schedule] disk save ok (${n} events, mode=${mode})`);
+    return n;
   } catch (e) {
     console.error("[schedule] disk save failed", e);
     throw e;
@@ -434,12 +505,21 @@ export async function saveScheduleAsync(events: ScheduleEvent[]) {
  */
 export async function flushScheduleToDisk(): Promise<ScheduleEvent[]> {
   const list = loadSchedule();
-  if (!list.length) return list;
+  // Never flush an empty in-memory cache over real disk data
+  if (!list.length) {
+    const disk = await loadDiskList();
+    if (disk.length > 0) {
+      memoryCache = disk;
+      writeLocalStorage(disk);
+      return disk;
+    }
+    return list;
+  }
   try {
-    await saveScheduleAsync(list);
+    await saveScheduleAsync(list, "merge");
   } catch {
-    saveSchedule(list);
-    await new Promise<void>((r) => window.setTimeout(r, 200));
+    saveSchedule(list, "merge");
+    await new Promise<void>((r) => window.setTimeout(r, 300));
   }
   return loadSchedule();
 }
@@ -449,45 +529,53 @@ export async function flushScheduleToDisk(): Promise<ScheduleEvent[]> {
  */
 function withDefaults(list: ScheduleEvent[]): ScheduleEvent[] {
   const { events, added } = mergeDefaultCalendarEvents(list);
-  if (added > 0) {
-    memoryCache = events;
-    writeLocalStorage(events);
-    void invokeSaveToDisk(events).catch(() => undefined);
-    return events;
-  }
   memoryCache = events;
+  writeLocalStorage(events);
+  // Only persist when defaults were newly seeded AND we have real rows
+  if (added > 0 && events.length > 0) {
+    void invokeSaveToDisk(events).catch(() => undefined);
+  }
   return events;
 }
 
 /**
  * Load from disk (shared across all windows) and seed local caches.
- * Migrates localStorage → disk when disk is empty.
+ * Always merges disk + localStorage so a failed prior disk write cannot
+ * drop plans that still live in the browser store.
  * Always merges default public holidays + NewJeans days if missing.
  */
 export async function hydrateSchedule(): Promise<ScheduleEvent[]> {
   if (hydratePromise) return hydratePromise;
   hydratePromise = (async () => {
+    const local = readLocalStorage();
     if (!isTauri()) {
-      const local = readLocalStorage();
       return withDefaults(local);
     }
     try {
-      const disk = normalizeList(await invoke<unknown>("load_schedule"));
-      if (disk.length > 0) {
-        writeLocalStorage(disk);
-        return withDefaults(disk);
+      const disk = await loadDiskList();
+      // Union disk + localStorage + memory — never clobber newer local plans
+      const merged = mergeByIdPreferNewer(disk, local, memoryCache);
+      const withDef = withDefaults(merged);
+      writeLocalStorage(withDef);
+      // If local/memory had anything disk didn't, push union back to disk
+      const diskIds = new Set(disk.map((e) => e.id));
+      const needsWrite =
+        withDef.length > 0 &&
+        (withDef.some(
+          (e) =>
+            !diskIds.has(e.id) &&
+            !e.id.startsWith("baa-default:")
+        ) ||
+          withDef.length > disk.length ||
+          disk.length === 0);
+      if (needsWrite) {
+        await invokeSaveToDisk(withDef).catch((e) =>
+          console.error("[schedule] hydrate backfill save failed", e)
+        );
       }
-      // Disk empty → migrate any old localStorage data to disk
-      const local = readLocalStorage();
-      if (local.length > 0) {
-        const merged = withDefaults(local);
-        await invokeSaveToDisk(merged).catch(() => undefined);
-        return merged;
-      }
-      return withDefaults([]);
+      return withDef;
     } catch (e) {
       console.error("[schedule] hydrate failed", e);
-      const local = readLocalStorage();
       return withDefaults(local);
     }
   })().finally(() => {
@@ -502,32 +590,27 @@ export async function reloadScheduleFromDisk(): Promise<ScheduleEvent[]> {
   // Keep a snapshot of in-flight local writes so a slow disk read cannot
   // erase a plan the user just added in this webview.
   const memSnap = memoryCache;
+  const localSnap = readLocalStorage();
   const genAtStart = scheduleWriteGen;
   if (!isTauri()) {
     return withDefaults(loadSchedule());
   }
   try {
-    const disk = normalizeList(
-      await Promise.race([
-        invoke<unknown>("load_schedule"),
-        new Promise<never>((_, rej) =>
-          window.setTimeout(
-            () => rej(new Error("load_schedule timed out")),
-            3000
-          )
-        ),
-      ])
-    );
+    const disk = await loadDiskList();
     // If user saved again while we were loading, trust the latest memory
     if (scheduleWriteGen !== genAtStart && memoryCache) {
-      return withDefaults(memoryCache);
+      return withDefaults(
+        mergeByIdPreferNewer(disk, localSnap, memoryCache)
+      );
     }
-    const merged = mergePendingMemory(disk, memSnap);
+    const merged = mergeByIdPreferNewer(disk, localSnap, memSnap);
     writeLocalStorage(merged);
     memoryCache = merged;
     return withDefaults(merged);
   } catch {
-    return withDefaults(memSnap ?? loadSchedule());
+    return withDefaults(
+      mergeByIdPreferNewer(memSnap, localSnap, loadSchedule())
+    );
   }
 }
 

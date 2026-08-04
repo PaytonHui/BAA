@@ -264,26 +264,36 @@ export async function showPanelWindow(
   large = false
 ): Promise<void> {
   const label = LABELS[kind];
-  const { w, h } = await panelSize(kind, large);
-  const { x, y } = await positionNearPet(w, h);
+  // Size + place in parallel with looking up the window
+  const [sizePos, existing] = await Promise.all([
+    (async () => {
+      const { w, h } = await panelSize(kind, large);
+      const { x, y } = await positionNearPet(w, h);
+      return { w, h, x, y };
+    })(),
+    WebviewWindow.getByLabel(label),
+  ]);
+  const { w, h, x, y } = sizePos;
   const shown = `${kind}-window-shown`;
 
-  const existing = await WebviewWindow.getByLabel(label);
   if (existing) {
-    // Place once while hidden — no setPosition/setSize after show (those
-    // jump the OS window mid-fade and read as a shake).
+    // Always hide first so macOS drops the last painted frame (afterimage).
+    // Place while hidden, wait a frame, then show + reveal content.
     try {
       await existing.hide();
     } catch {
       /* ignore */
     }
+
     try {
       await existing.setSize(new LogicalSize(w, h));
       await existing.setPosition(new LogicalPosition(x, y));
     } catch {
       /* ignore */
     }
-    // One frame so macOS commits size/pos before visible
+
+    // Let compositor commit size/pos while still hidden
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
 
     try {
@@ -291,18 +301,16 @@ export async function showPanelWindow(
       await existing.setIgnoreCursorEvents(false);
       await existing.setAlwaysOnTop(true);
       await existing.setVisibleOnAllWorkspaces(true);
+      // Size re-assert forces a clean transparent redraw (kills ghost strip)
+      await existing.setSize(new LogicalSize(w, h));
     } catch {
       /* ignore */
     }
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
-    await emit(shown, { large });
-    await emit(`${kind}-window-data`, { large });
-    // After enter fade settles: size re-assert only (no move) + focus
-    window.setTimeout(() => {
-      void existing.setSize(new LogicalSize(w, h)).catch(() => undefined);
-      void existing.setIgnoreCursorEvents(false).catch(() => undefined);
-      void existing.setFocus().catch(() => undefined);
-    }, 180);
+
+    void existing.setFocus().catch(() => undefined);
+    // shown → MacWindowShell blanks one frame then reveals (no stale buffer)
+    void emit(shown, { large });
+    void emit(`${kind}-window-data`, { large });
     return;
   }
 
@@ -352,15 +360,12 @@ export async function showPanelWindow(
     /* best-effort show */
   }
 
-  // Give the webview a moment to mount listeners, then fire ONE enter
-  await new Promise<void>((r) => window.setTimeout(r, 50));
-  await emit(shown, { large });
-  // After fade: size only (no second setPosition — avoids open shake)
-  window.setTimeout(() => {
-    void win.setSize(new LogicalSize(w, h)).catch(() => undefined);
-    void win.setIgnoreCursorEvents(false).catch(() => undefined);
-    void win.setFocus().catch(() => undefined);
-  }, 180);
+  void win.setFocus().catch(() => undefined);
+
+  // First create: webview needs a tick to mount the shown listener
+  await new Promise<void>((r) => window.setTimeout(r, 32));
+  void emit(shown, { large });
+  void emit(`${kind}-window-data`, { large });
 }
 
 export async function hidePanelWindow(kind: PanelKind): Promise<void> {

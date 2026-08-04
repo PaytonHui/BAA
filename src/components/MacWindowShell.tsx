@@ -10,8 +10,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { usePanelClickThrough } from "../hooks/usePanelClickThrough";
 
 /** Keep in sync with CSS --mac-window-in-ms / --mac-window-out-ms */
-export const MAC_WINDOW_IN_MS = 160;
-export const MAC_WINDOW_OUT_MS = 120;
+export const MAC_WINDOW_IN_MS = 0; // open is instant (no fade lag)
+/** Instant close — exit fade left a ghost/afterimage on transparent macOS windows */
+export const MAC_WINDOW_OUT_MS = 0;
 
 export function sleep(ms: number) {
   return new Promise<void>((r) => window.setTimeout(r, ms));
@@ -82,80 +83,56 @@ export function MacWindowShell({
   const enterRafRef = useRef(0);
 
   /**
-   * Start enter animation. Pass `force` when main re-shows the OS window so a
-   * stuck openSession+pre (opacity 0) never blocks the next open.
+   * Reveal content after OS window is already shown at final place.
+   * Start from `pre` (fully blank) for one frame so macOS never flashes the
+   * previous paint (afterimage), then snap to idle.
    */
   const playEnter = useCallback((force = false) => {
-    if (force) {
-      openSessionRef.current = false;
-      if (exitTimerRef.current) {
-        window.clearTimeout(exitTimerRef.current);
-        exitTimerRef.current = 0;
-      }
-      exitResolveRef.current = null;
-      if (enterRafRef.current) {
-        cancelAnimationFrame(enterRafRef.current);
-        enterRafRef.current = 0;
-      }
-    } else {
-      // Fully open already → ignore (kills double-open flash)
-      if (phaseRef.current === "in" || phaseRef.current === "idle") {
-        if (openSessionRef.current) return;
-      }
-      // Mid-enter (pre→in rAF) → ignore
-      if (openSessionRef.current && phaseRef.current === "pre") return;
-      // Mid-exit / stuck pre after hide: allow a fresh enter
-      if (phaseRef.current === "out" || !openSessionRef.current) {
-        if (exitTimerRef.current) {
-          window.clearTimeout(exitTimerRef.current);
-          exitTimerRef.current = 0;
-        }
-        exitResolveRef.current = null;
+    if (!force) {
+      if (
+        openSessionRef.current &&
+        (phaseRef.current === "in" || phaseRef.current === "idle")
+      ) {
+        return;
       }
     }
 
-    openSessionRef.current = true;
-
+    if (exitTimerRef.current) {
+      window.clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = 0;
+    }
+    exitResolveRef.current = null;
     if (enterRafRef.current) {
       cancelAnimationFrame(enterRafRef.current);
       enterRafRef.current = 0;
     }
 
-    // Stay on pre for one frame so the browser commits opacity:0, then animate in
+    openSessionRef.current = true;
+    // Blank first (kills stale buffer), then show next frame
     setPhase("pre");
     phaseRef.current = "pre";
     enterRafRef.current = requestAnimationFrame(() => {
       enterRafRef.current = requestAnimationFrame(() => {
         enterRafRef.current = 0;
-        setPhase("in");
-        phaseRef.current = "in";
+        setPhase("idle");
+        phaseRef.current = "idle";
       });
     });
   }, []);
 
   const playExit = useCallback(() => {
     return new Promise<void>((resolve) => {
-      if (phaseRef.current === "pre" || phaseRef.current === "out") {
-        openSessionRef.current = false;
-        resolve();
-        return;
-      }
-
-      exitResolveRef.current = () => {
-        openSessionRef.current = false;
-        resolve();
-      };
-      setPhase("out");
-      phaseRef.current = "out";
-
-      if (exitTimerRef.current) window.clearTimeout(exitTimerRef.current);
-      exitTimerRef.current = window.setTimeout(() => {
-        const r = exitResolveRef.current;
-        exitResolveRef.current = null;
-        openSessionRef.current = false;
+      // Instant blank — no fade (fade left a translucent afterimage on macOS)
+      if (exitTimerRef.current) {
+        window.clearTimeout(exitTimerRef.current);
         exitTimerRef.current = 0;
-        r?.();
-      }, MAC_WINDOW_OUT_MS + 40);
+      }
+      exitResolveRef.current = null;
+      openSessionRef.current = false;
+      setPhase("pre");
+      phaseRef.current = "pre";
+      // One frame so opacity:0 / visibility paint before OS hide
+      requestAnimationFrame(() => resolve());
     });
   }, []);
 
@@ -169,9 +146,7 @@ export function MacWindowShell({
     return () => window.removeEventListener("baa-mac-window-exit", handler);
   }, [playExit]);
 
-  // Enter when main says the OS window is ready.
-  // Always force on shown — hide without exit (or cancelled rAF) can leave
-  // openSession+pre, which would keep the panel at opacity 0 forever.
+  // Enter when main says the OS window is ready (or once on mount).
   useEffect(() => {
     if (!shownEvent) {
       playEnter(true);
@@ -192,19 +167,17 @@ export function MacWindowShell({
       unlisten = fn;
     });
 
-    // If shown-event was missed (webview still booting), enter once
+    // Boot safety: only if still blank (missed shown while mounting)
     const fallback = window.setTimeout(() => {
       if (phaseRef.current === "pre" && !openSessionRef.current) {
         playEnter(true);
       }
-    }, 280);
+    }, 120);
 
     return () => {
       cancelled = true;
       unlisten?.();
       window.clearTimeout(fallback);
-      // Cancel pending frames but clear openSession so a later shown can enter.
-      // Leaving openSession=true after cancelling rAF was a common stuck path.
       if (enterRafRef.current) {
         cancelAnimationFrame(enterRafRef.current);
         enterRafRef.current = 0;
@@ -257,7 +230,8 @@ export function MacWindowShell({
 }
 
 /**
- * Close helper: play exit animation once, then hide.
+ * Close helper: blank content (no fade), then hide OS window.
+ * Blank-before-hide is what prevents open afterimage on transparent macOS webviews.
  */
 export function useMacWindowClose(emitClosed?: () => Promise<void> | void) {
   const closingRef = useRef(false);
@@ -279,10 +253,9 @@ export function useMacWindowClose(emitClosed?: () => Promise<void> | void) {
         window.dispatchEvent(
           new CustomEvent("baa-mac-window-exit", { detail: { resolve } })
         );
-        window.setTimeout(resolve, MAC_WINDOW_OUT_MS + 50);
+        // Fallback if shell isn't listening
+        window.setTimeout(resolve, 48);
       });
-      // Hide BEFORE telling main "closed" so a rapid re-open never sees
-      // wasVisible=true with opacity-0 (stuck mac-window-pre) and skip enter.
       try {
         await getCurrentWindow().hide();
       } catch {

@@ -62,19 +62,15 @@ export default function CalendarWindowApp() {
   useEffect(() => {
     const unsubs: Array<() => void> = [];
     void listen("calendar-window-shown", () => {
-      refresh();
+      // Soft refresh only — avoid resize thrash on every open (felt like lag)
+      const wasForm = formOpenRef.current;
       formOpenRef.current = false;
-      // Snap to browse height + force transparent redraw (no white under-card bar)
-      void resizeCalendarForComposer(false, largeRef.current).catch(
-        () => undefined
-      );
-      window.setTimeout(() => {
-        if (!formOpenRef.current) {
-          void resizeCalendarForComposer(false, largeRef.current).catch(
-            () => undefined
-          );
-        }
-      }, 300);
+      refresh();
+      if (wasForm) {
+        void resizeCalendarForComposer(false, largeRef.current).catch(
+          () => undefined
+        );
+      }
     }).then((u) => unsubs.push(u));
     void listen("calendar-window-data", () => {
       refresh();
@@ -182,9 +178,10 @@ export default function CalendarWindowApp() {
     writingRef.current = true;
     void (async () => {
       try {
-        await saveScheduleAsync(next);
+        // replace: intentional delete must not re-merge removed id from disk
+        await saveScheduleAsync(next, "replace");
       } catch {
-        saveSchedule(next);
+        saveSchedule(next, "replace");
       }
       void publishScheduleToCompanion(next);
       void emit("schedule-updated", {}).catch(() => undefined);
@@ -193,24 +190,29 @@ export default function CalendarWindowApp() {
   }, []);
 
   const persist = useCallback((next: ScheduleEvent[]) => {
-    // UI + memory first, then MUST land on disk before any cross-window reload
+    // UI first, then await disk (merge so we never wipe other plans)
     setEvents(next);
     writingRef.current = true;
-    saveSchedule(next);
     void (async () => {
+      let ok = false;
       try {
-        await saveScheduleAsync(next);
+        await saveScheduleAsync(next, "merge");
+        ok = true;
       } catch {
         try {
-          await saveScheduleAsync(next);
+          await saveScheduleAsync(next, "merge");
+          ok = true;
         } catch {
-          saveSchedule(next);
+          saveSchedule(next, "merge");
         }
       }
-      void publishScheduleToCompanion(next);
-      // Only notify others after disk write finished
-      void emit("schedule-updated", {}).catch(() => undefined);
-      // Hold the guard briefly so our own schedule-updated doesn't wipe UI
+      void publishScheduleToCompanion(loadSchedule());
+      // Only ping other windows after a real save attempt
+      if (ok) {
+        void emit("schedule-updated", {}).catch(() => undefined);
+      } else {
+        console.error("[calendar] plan saved in UI but disk write failed");
+      }
       window.setTimeout(() => {
         writingRef.current = false;
       }, 400);
