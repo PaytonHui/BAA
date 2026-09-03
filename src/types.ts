@@ -38,10 +38,19 @@ export interface ChatMessage {
 
 export interface AppConfig {
   apiKey?: string | null;
-  /** Optional name from Grok login */
+  /** Optional display name */
   displayName?: string | null;
   model: string;
   systemPrompt: string;
+}
+
+export interface AiStatus {
+  available: boolean;
+  model: string;
+  reason?: string | null;
+  code?: string | null;
+  loggedIn: boolean;
+  displayName?: string | null;
 }
 
 export interface ChatResponse {

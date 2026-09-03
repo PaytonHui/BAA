@@ -7,7 +7,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChatPanel } from "./components/ChatPanel";
-import type { GrokAuthStatus } from "./components/GrokLoginForm";
 import {
   MacWindowShell,
   useMacWindowClose,
@@ -34,6 +33,7 @@ import {
 } from "./lib/schedule";
 // applyScheduleUpserts used for optimistic local mark before disk sync
 import type {
+  AiStatus,
   ChatAttachment,
   ChatMessage,
   ChatResponse,
@@ -71,7 +71,7 @@ const WELCOME: ChatMessage = {
   id: "welcome",
   role: "assistant",
   content:
-    "Hey Bunnies 🐰 I'm Binky. Chat with me here — if you tell me your plans (e.g. “meeting tomorrow 3pm”), I'll mark them on my calendar automatically!",
+    "Hey Bunnies 🐰 I'm Binky. I run on-device with Apple Intelligence — tell me your plans (e.g. “meeting tomorrow 3pm”) and I'll mark them on my calendar!",
   at: Date.now(),
 };
 
@@ -110,16 +110,21 @@ export default function ChatWindowApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [large, setLarge] = useState(false);
-  const [auth, setAuth] = useState<GrokAuthStatus | null>(null);
+  const [auth, setAuth] = useState<AiStatus | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const loadingRef = useRef(false);
 
   const refreshAuth = useCallback(async () => {
     try {
-      const s = await invoke<GrokAuthStatus>("grok_auth_status");
+      const s = await invoke<AiStatus>("ai_status");
       setAuth(s);
     } catch {
-      setAuth({ loggedIn: false, model: "basic" });
+      setAuth({
+        available: false,
+        loggedIn: true,
+        model: "apple-intelligence",
+        reason: "Could not check Apple Intelligence.",
+      });
     } finally {
       setAuthReady(true);
     }
@@ -152,7 +157,7 @@ export default function ChatWindowApp() {
     }).then((fn) => {
       u1 = fn;
     });
-    void listen("grok-logged-in", () => {
+    void listen("ai-status-changed", () => {
       void refreshAuth();
     }).then((fn) => {
       u3 = fn;
@@ -200,7 +205,7 @@ export default function ChatWindowApp() {
     []
   );
 
-  const needsLogin = authReady && !auth?.loggedIn;
+  const aiReady = auth?.available !== false;
 
   const close = useMacWindowClose(async () => {
     await emit("chat-closed", {}).catch(() => undefined);
@@ -314,9 +319,11 @@ export default function ChatWindowApp() {
     attachments: ChatAttachment[] = []
   ) => {
     if (loadingRef.current) return;
-    if (!auth?.loggedIn) {
-      setError("Sign in to basic Grok first to chat with Binky.");
-      // Refresh in case key was saved from another panel
+    if (auth && auth.available === false) {
+      setError(
+        auth.reason ||
+          "Turn on Apple Intelligence in System Settings to chat with Binky."
+      );
       void refreshAuth();
       return;
     }
@@ -338,7 +345,7 @@ export default function ChatWindowApp() {
       kind: "text",
       attachments: attachments.length ? attachments : undefined,
     };
-    // Short history — huge flyer threads made chat hang after Grok replied
+    // Short history — huge flyer threads made chat hang after a reply
     const history = [...messages, userMsg]
       .filter((m) => m.role === "user" || m.role === "assistant")
       .slice(-8)
@@ -412,20 +419,20 @@ export default function ChatWindowApp() {
       });
 
       const res = await withTimeout(
-        invoke<ChatResponse>("chat_with_grok", {
+        invoke<ChatResponse>("chat_with_apple_intelligence", {
           req: {
             messages: messagesForApi,
             today: todayKey(),
           },
         }),
-        35000,
-        "Grok chat"
+        45000,
+        "Binky chat"
       );
 
       const rawReply = pickReplyText(res).trim();
       if (!rawReply) {
         throw new Error(
-          `Grok returned an empty reply (${JSON.stringify(res).slice(0, 120)}). Try again.`
+          `Binky returned an empty reply (${JSON.stringify(res).slice(0, 120)}). Try again.`
         );
       }
 
@@ -440,7 +447,7 @@ export default function ChatWindowApp() {
         newEv = !cancels.length
           ? resolveScheduleEventsFromChat(text, extracted.events, todayKey())
           : extracted.events;
-        // Last resort: Grok forgot SCHEDULE_JSON and resolver returned empty
+        // Last resort: model forgot SCHEDULE_JSON and resolver returned empty
         if (!cancels.length && !newEv.length && wantSchedule) {
           newEv = fallbackEventsFromUserRequest(text, todayKey());
         }
@@ -531,14 +538,15 @@ export default function ChatWindowApp() {
       })();
       return;
     } catch (e) {
-      const msg = errText(e).replace(/^NOT_LOGGED_IN:\s*/i, "");
+      const msg = errText(e);
       if (
-        msg.includes("NOT_LOGGED_IN") ||
-        msg.toLowerCase().includes("login")
+        /apple intelligence/i.test(msg) ||
+        /not available/i.test(msg) ||
+        /not enabled/i.test(msg)
       ) {
-        setAuth((a) => (a ? { ...a, loggedIn: false } : a));
+        void refreshAuth();
       }
-      // Even if Grok fails, still try offline calendar mark from user text
+      // Even if on-device AI fails, still try offline calendar mark from user text
       let offlineNote = "";
       try {
         if (looksLikeScheduleRequest(text)) {
@@ -578,8 +586,11 @@ export default function ChatWindowApp() {
 
   const sendSticker = async (stickerId: string, emoji: string) => {
     if (loadingRef.current) return;
-    if (!auth?.loggedIn) {
-      setError("Sign in to basic Grok first to chat with Binky.");
+    if (auth && auth.available === false) {
+      setError(
+        auth.reason ||
+          "Turn on Apple Intelligence in System Settings to chat with Binky."
+      );
       return;
     }
     loadingRef.current = true;
@@ -604,7 +615,7 @@ export default function ChatWindowApp() {
 
     try {
       const res = await withTimeout(
-        invoke<ChatResponse>("chat_with_grok", {
+        invoke<ChatResponse>("chat_with_apple_intelligence", {
           req: {
             messages: next
               .slice(-8)
@@ -616,8 +627,8 @@ export default function ChatWindowApp() {
             today: todayKey(),
           },
         }),
-        35000,
-        "Grok chat"
+        45000,
+        "Binky chat"
       );
       const raw = pickReplyText(res).trim() || "…";
       let clean = raw;
@@ -672,49 +683,6 @@ export default function ChatWindowApp() {
     );
   }
 
-  // AI chat is coming soon — no login / no chat for now
-  const AI_CHAT_COMING_SOON = true;
-  if (AI_CHAT_COMING_SOON || needsLogin) {
-    return (
-      <MacWindowShell
-        shownEvent="chat-window-shown"
-        forceInteractive
-        className="p-[14px] overflow-y-auto overflow-x-hidden"
-      >
-        <div className="w-full min-h-full flex items-start justify-center py-1">
-          <div
-            className="baa-ios-solid text-[#1C1C1E] p-4 space-y-3 w-full max-w-[300px]"
-            onPointerDown={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="text-[16px] font-semibold tracking-[-0.02em] leading-snug">
-                AI assistant
-              </h2>
-              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
-                Coming soon
-              </span>
-            </div>
-            <button
-              type="button"
-              disabled
-              aria-disabled="true"
-              className="baa-ios-btn baa-ios-btn-primary w-full py-2.5 text-[13px] opacity-40 cursor-not-allowed pointer-events-none"
-            >
-              Make Binky my AI
-            </button>
-            <button
-              type="button"
-              onClick={() => void close()}
-              className="baa-ios-btn baa-ios-btn-secondary w-full py-2.5 text-[13px]"
-            >
-              Back
-            </button>
-          </div>
-        </div>
-      </MacWindowShell>
-    );
-  }
-
   return (
     <MacWindowShell
       shownEvent="chat-window-shown"
@@ -722,12 +690,27 @@ export default function ChatWindowApp() {
       className="p-[18px] overflow-hidden"
     >
       <div className="w-full h-full flex flex-col items-stretch justify-center gap-1 min-h-0">
-        {auth?.displayName && (
-          <p className="text-[9px] text-slate-500 text-center shrink-0 px-1">
-            Basic Grok · {auth.displayName}
-            {auth.keyHint ? ` · ${auth.keyHint}` : ""}
-          </p>
-        )}
+        <p className="text-[9px] text-slate-500 text-center shrink-0 px-1">
+          {aiReady ? (
+            "On-device Apple Intelligence"
+          ) : (
+            <>
+              {auth?.reason ||
+                "Turn on Apple Intelligence in System Settings to chat."}{" "}
+              <button
+                type="button"
+                className="text-[#007AFF] underline"
+                onClick={() => {
+                  void invoke("open_apple_intelligence_settings").catch(
+                    () => undefined
+                  );
+                }}
+              >
+                Open Settings
+              </button>
+            </>
+          )}
+        </p>
         <ChatPanel
           open
           messages={messages}

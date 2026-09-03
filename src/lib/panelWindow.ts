@@ -106,7 +106,7 @@ const TITLES: Record<PanelKind, string> = {
   color: "BAA Light color",
   settings: "BAA Settings",
   link: "BAA Share calendar",
-  login: "BAA · Grok login",
+  login: "BAA · Apple Intelligence",
   menu: "BAA Menu",
 };
 
@@ -126,7 +126,7 @@ async function panelSize(
         large ? CAL_VIEW_LARGE_H : CAL_VIEW_H
       );
     case "chat":
-      // Tall enough for the Grok upgrade / login sheet (not just chat bubbles)
+      // Tall enough for chat bubbles + status line
       return withShadowPad(
         large ? CHAT_LARGE_W : Math.max(CHAT_W, 320),
         large

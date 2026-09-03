@@ -39,10 +39,10 @@ export type MenuAction =
 export default function MenuWindowApp() {
   const [muted, setMuted] = useState(() => isMuted());
   const [open, setOpen] = useState(true);
-  const [showChat, setShowChat] = useState(true);
+  const [showChat] = useState(true);
 
   const refreshAuth = useCallback(async () => {
-    setShowChat(false);
+    /* chat is always unlocked on Apple Intelligence */
   }, []);
 
   useEffect(() => {

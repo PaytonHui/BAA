@@ -152,8 +152,7 @@ function animatePetScaleHome(
 export default function App() {
   const [expression, setExpression] = useState<PetExpression>("idle");
   const [chatOpen, setChatOpen] = useState(false);
-  /** Grok signed in → left-click opens chat; free tier → calendar */
-  const grokLoggedInRef = useRef(false);
+
   /**
    * Window/layout shell (main WebGL window only):
    * - compact: pet only
@@ -638,24 +637,6 @@ export default function App() {
       unlisten?.();
     };
   }, [fireAnim]);
-
-  // Grok login status — free tier left-click opens calendar, not chat
-  useEffect(() => {
-    const refresh = () => {
-      void invoke<{ loggedIn?: boolean }>("grok_auth_status")
-        .then((s) => {
-          grokLoggedInRef.current = !!s.loggedIn;
-        })
-        .catch(() => {
-          grokLoggedInRef.current = false;
-        });
-    };
-    refresh();
-    const unsubs: Array<() => void> = [];
-    void listen("grok-logged-in", refresh).then((u) => unsubs.push(u));
-    void listen("grok-logged-out", refresh).then((u) => unsubs.push(u));
-    return () => unsubs.forEach((u) => u());
-  }, []);
 
   // Separate chat window → pet expressions + schedule refresh
   useEffect(() => {
@@ -2289,7 +2270,7 @@ export default function App() {
       return;
     }
     // Tap body: dismiss open panel / menu, else toggle primary panel.
-    // Free (no Grok): calendar. Upgraded: chat.
+    // Left-click opens chat (Apple Intelligence). Calendar stays in the menu.
     // Do NOT open a panel while closing another.
     if (e.button === 0) {
       if (loginOpenRef.current) {
@@ -2379,8 +2360,7 @@ export default function App() {
         await closeChat();
         return;
       }
-      // AI chat is coming soon — left-click always opens calendar
-      await openCalendarRef.current?.();
+      await openChatRef.current?.();
     }
   };
 

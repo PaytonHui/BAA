@@ -1,7 +1,8 @@
 /**
- * Standalone Grok login window — basic Grok for Binky (not 4.5).
+ * Legacy login window — v0.2 uses on-device Apple Intelligence (no API key).
+ * Kept so an old panel label still has a destination.
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -9,8 +10,11 @@ import {
   MacWindowShell,
   useMacWindowClose,
 } from "./components/MacWindowShell";
+import type { AiStatus } from "./types";
 
 export default function GrokLoginWindowApp() {
+  const [ai, setAi] = useState<AiStatus | null>(null);
+
   useEffect(() => {
     invoke("pin_to_all_spaces_cmd").catch(() => undefined);
     getCurrentWindow()
@@ -19,12 +23,17 @@ export default function GrokLoginWindowApp() {
     getCurrentWindow()
       .setAlwaysOnTop(true)
       .catch(() => undefined);
+    void invoke<AiStatus>("ai_status")
+      .then(setAi)
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
     let u: (() => void) | undefined;
     void listen("login-window-shown", () => {
-      /* form is ready */
+      void invoke<AiStatus>("ai_status")
+        .then(setAi)
+        .catch(() => undefined);
     }).then((fn) => {
       u = fn;
     });
@@ -48,17 +57,35 @@ export default function GrokLoginWindowApp() {
           <h2 className="text-[16px] font-semibold tracking-[-0.02em]">
             AI assistant
           </h2>
-          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
-            Coming soon
+          <span
+            className={`shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${
+              ai?.available
+                ? "bg-[#34C759]/15 text-[#248A3D]"
+                : "bg-black/[0.06] text-[#8E8E93]"
+            }`}
+          >
+            {ai?.available ? "On-device" : "Needs setup"}
           </span>
         </div>
-        <button
-          type="button"
-          disabled
-          className="baa-ios-btn baa-ios-btn-primary w-full py-2.5 text-[13px] opacity-40 cursor-not-allowed pointer-events-none"
-        >
-          Make Binky my AI
-        </button>
+        <p className="text-[12px] text-[#636366] leading-snug">
+          {ai?.available
+            ? "Binky chats with on-device Apple Intelligence. No API key needed."
+            : ai?.reason ||
+              "Turn on Apple Intelligence in System Settings → Apple Intelligence & Siri."}
+        </p>
+        {!ai?.available && (
+          <button
+            type="button"
+            className="baa-ios-btn baa-ios-btn-primary w-full py-2.5 text-[13px]"
+            onClick={() => {
+              void invoke("open_apple_intelligence_settings").catch(
+                () => undefined
+              );
+            }}
+          >
+            Open Apple Intelligence settings
+          </button>
+        )}
         <button
           type="button"
           onClick={() => void close()}

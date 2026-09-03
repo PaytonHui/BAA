@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import type { AppConfig } from "../types";
+import type { AiStatus, AppConfig } from "../types";
 import { resyncUserBirthdayEvents } from "../lib/defaultCalendar";
 import {
   hydrateSchedule,
@@ -59,11 +60,22 @@ export function SettingsModal({
   void _onSave;
   const [msg, setMsg] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile>(() => loadUserProfile());
+  const [ai, setAi] = useState<AiStatus | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setMsg(null);
     setProfile(loadUserProfile());
+    void invoke<AiStatus>("ai_status")
+      .then(setAi)
+      .catch(() =>
+        setAi({
+          available: false,
+          loggedIn: true,
+          model: "apple-intelligence",
+          reason: "Could not check Apple Intelligence.",
+        })
+      );
   }, [open, initial]);
 
   if (!open) return null;
@@ -233,23 +245,38 @@ export function SettingsModal({
         </div>
       </div>
 
-      <div className="baa-ios-card px-3.5 py-3 space-y-2.5 opacity-90">
+      <div className="baa-ios-card px-3.5 py-3 space-y-2.5">
         <div className="flex items-center justify-between gap-2">
           <p className="text-[14px] font-semibold tracking-[-0.01em] text-[#1C1C1E]">
             AI assistant
           </p>
-          <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/[0.06] text-[#8E8E93]">
-            Coming soon
+          <span
+            className={`shrink-0 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full ${
+              ai?.available
+                ? "bg-[#34C759]/15 text-[#248A3D]"
+                : "bg-black/[0.06] text-[#8E8E93]"
+            }`}
+          >
+            {ai?.available ? "On-device" : "Needs setup"}
           </span>
         </div>
-        <button
-          type="button"
-          disabled
-          aria-disabled="true"
-          className="baa-ios-btn baa-ios-btn-primary w-full text-[13px] py-2.5 opacity-40 cursor-not-allowed pointer-events-none"
-        >
-          Make Binky my AI assistant
-        </button>
+        <p className="text-[12px] text-[#636366] leading-snug">
+          {ai?.available
+            ? "Binky chats with on-device Apple Intelligence. No API key, nothing leaves this Mac."
+            : ai?.reason ||
+              "Turn on Apple Intelligence in System Settings to chat with Binky."}
+        </p>
+        {!ai?.available && (
+          <button
+            type="button"
+            className="baa-ios-btn baa-ios-btn-primary w-full text-[13px] py-2.5"
+            onClick={() => {
+              void invoke("open_apple_intelligence_settings").catch(() => undefined);
+            }}
+          >
+            Open Apple Intelligence settings
+          </button>
+        )}
       </div>
 
       {msg && (

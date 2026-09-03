@@ -2,28 +2,18 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-/// Basic Grok for the lightstick — fast non-reasoning, not flagship.
-/// Keep in sync with models available on https://api.x.ai/v1/models .
-pub const BASIC_GROK_MODEL: &str = "grok-4.20-0309-non-reasoning";
-
-/// Retired model ids (no longer on api.x.ai) — migrate saved config to BASIC_GROK_MODEL.
-pub const LEGACY_GROK_MODELS: &[&str] = &[
-    "grok-4-1-fast-non-reasoning",
-    "grok-3-mini",
-    "grok-3-mini-fast",
-    "grok-2-1212",
-    "grok-beta",
-];
+pub const APPLE_INTELLIGENCE_MODEL: &str = "apple-intelligence";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
-    /// Optional override; env XAI_API_KEY takes priority if set.
+    /// Legacy field (Grok key). Ignored — Binky uses on-device Apple Intelligence.
+    #[serde(default)]
     pub api_key: Option<String>,
-    /// Display name from login (optional)
+    /// Display name from settings (optional)
     #[serde(default)]
     pub display_name: Option<String>,
-    /// e.g. grok-4.20-0309-non-reasoning (basic). Prefer BASIC_GROK_MODEL.
+    /// Always apple-intelligence in v0.2+
     pub model: String,
     pub system_prompt: String,
 }
@@ -33,10 +23,11 @@ impl Default for AppConfig {
         Self {
             api_key: None,
             display_name: None,
-            model: std::env::var("XAI_MODEL").unwrap_or_else(|_| BASIC_GROK_MODEL.into()),
-            system_prompt: "You are Grok, built by xAI. You live as a lightweight desktop companion \
-shaped like a NewJeans lightstick named Binky. Be helpful, direct, concise, and a bit witty. \
-Match the user's language. Keep answers short enough for a small chat bubble unless they ask for detail. \
+            model: APPLE_INTELLIGENCE_MODEL.into(),
+            system_prompt: "You are Binky, a lightweight desktop companion shaped like a NewJeans lightstick. \
+Be helpful, direct, concise, and a bit witty. Match the user's language. \
+Keep answers short enough for a small chat bubble unless they ask for detail. \
+You run fully on-device with Apple Intelligence — no cloud account is needed. \
 You can remember their schedule across sessions. To ADD a plan, confirm briefly then end with:\n\
 SCHEDULE_JSON:[{\"date\":\"YYYY-MM-DD\",\"title\":\"short title\",\"time\":\"HH:mm or empty\",\"note\":\"optional\",\"category\":\"work or other\"}]\n\
 To CHANGE type (work↔other) or edit an existing plan, end with:\n\
@@ -71,39 +62,19 @@ pub fn load_config() -> Result<AppConfig, String> {
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut cfg: AppConfig = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
-    let m = cfg.model.trim();
-    if m.is_empty() || LEGACY_GROK_MODELS.iter().any(|legacy| *legacy == m) {
-        // Migrate retired / flagship ids → current basic Grok
-        cfg.model = BASIC_GROK_MODEL.into();
+    if cfg.model.trim().is_empty() || cfg.model.starts_with("grok") {
+        cfg.model = APPLE_INTELLIGENCE_MODEL.into();
         let _ = save_config(&cfg);
     }
-    if cfg.system_prompt.is_empty() {
+    if cfg.system_prompt.is_empty() || cfg.system_prompt.contains("You are Grok") {
         cfg.system_prompt = AppConfig::default().system_prompt;
+        let _ = save_config(&cfg);
     }
     Ok(cfg)
-}
-
-/// Whether a Grok key is available (env or saved login).
-pub fn is_logged_in(cfg: &AppConfig) -> bool {
-    resolve_api_key(cfg).is_some()
 }
 
 pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
     let path = config_path()?;
     let raw = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(path, raw).map_err(|e| e.to_string())
-}
-
-/// Resolve API key: process env first, then saved config.
-pub fn resolve_api_key(cfg: &AppConfig) -> Option<String> {
-    if let Ok(k) = std::env::var("XAI_API_KEY") {
-        let t = k.trim().to_string();
-        if !t.is_empty() {
-            return Some(t);
-        }
-    }
-    cfg.api_key
-        .as_ref()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
 }

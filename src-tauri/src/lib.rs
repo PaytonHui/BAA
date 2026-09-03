@@ -1016,10 +1016,11 @@ pub fn run() {
             schedule_store::load_schedule_reminded,
             schedule_store::save_schedule_reminded,
             weather::fetch_weather_native,
+            chat::chat_with_apple_intelligence,
             chat::chat_with_grok,
+            chat::ai_status,
             chat::grok_auth_status,
-            chat::login_grok,
-            chat::logout_grok,
+            chat::open_apple_intelligence_settings,
             companion::get_link_info,
             companion::push_phone_event,
             companion::refresh_link_token,
@@ -1032,6 +1033,11 @@ pub fn run() {
 
             // LAN companion for iPhone QR link (same Wi‑Fi)
             companion::start_server();
+
+            // Load the on-device model in the background so first chat is faster.
+            std::thread::spawn(|| {
+                chat::prewarm_apple_intelligence();
+            });
 
             // Regular app → appears in the macOS Dock (start / pause from there)
             #[cfg(target_os = "macos")]

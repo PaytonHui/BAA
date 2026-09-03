@@ -1,6 +1,6 @@
 [package]
 name = "baa"
-version = "0.1.14"
+version = "0.2.0"
 description = "BAA — NewJeans lightstick desktop companion"
 authors = ["you"]
 edition = "2021"

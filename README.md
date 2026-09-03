@@ -8,24 +8,24 @@ It floats on your desktop with chat, calendar, care reminders, and lightstick LE
 ## Download (friends — no coding)
 
 1. Open **[Releases](https://github.com/PaytonHui/BAA/releases)**
-2. Download **`BAA_0.1.0_aarch64.dmg`** (Apple Silicon Macs: M1 / M2 / M3 / M4)
+2. Download **`BAA_0.2.0_aarch64.dmg`** (Apple Silicon Macs: M1 / M2 / M3 / M4)
 3. Open the DMG → drag **BAA** to Applications (or open it from the disk image)
 4. First open: if macOS blocks it → **right‑click BAA → Open** → **Open** again  
    (or **System Settings → Privacy & Security → Open Anyway**)
 
 ### After install
 - Right‑click the lightstick for the menu (Chat, Calendar, Colors, Settings…)
-- **Settings → Sign in to Grok** with your own [xAI API key](https://console.x.ai)  
-  (the app never ships with someone else’s key)
+- **Left‑click** opens chat — Binky uses **on-device Apple Intelligence** (no API key)
+- Turn on **System Settings → Apple Intelligence & Siri** if chat says it needs setup
 
-**Note:** This build is for **Apple Silicon (arm64)**. Intel Macs need a separate build.
+**Needs:** macOS 26+, Apple Silicon, Apple Intelligence enabled.
 
 ---
 
 ## What BAA does
 
 - 3D NewJeans lightstick pet (always on top, click‑through desktop)
-- Chat with basic Grok (xAI)
+- Chat with on-device Apple Intelligence (private, no cloud key)
 - Calendar (holidays, member birthdays, your birthday 🐰)
 - Care bubbles (water, eyes, weather tips, etc.)
 - Light colors (cycle + member colors)
@@ -42,14 +42,14 @@ npm install
 npm run tauri:dev
 ```
 
-**Needs:** Node.js, Rust, Xcode Command Line Tools (macOS).
+**Needs:** Node.js, Rust, Xcode Command Line Tools (macOS 26+).
 
 Release build:
 
 ```bash
 npm run tauri:build
 # → src-tauri/target/release/bundle/macos/BAA.app
-# → src-tauri/target/release/bundle/dmg/BAA_0.1.0_aarch64.dmg
+# → src-tauri/target/release/bundle/dmg/BAA_0.2.0_aarch64.dmg
 ```
 
 ---
@@ -60,10 +60,10 @@ npm run tauri:build
 |---|---|
 | **App** | BAA |
 | **Bundle ID** | `com.paytonhui.baa` |
-| **Stack** | Tauri 2 · React · Three.js · Rust |
+| **Stack** | Tauri 2 · React · Three.js · Rust · Apple Foundation Models |
 | **Local data** | `~/Library/Application Support/BAA/` |
 
-Secrets stay local (`.env` / API keys are gitignored). Only `.env.example` is in the repo.
+Chat runs fully on-device. No API keys. Only `.env.example` is in the repo.
 
 ---
 

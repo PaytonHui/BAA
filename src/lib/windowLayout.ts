@@ -39,7 +39,7 @@ export const SETTINGS_H = 720;
 export const LINK_W = 320;
 export const LINK_H = 720;
 
-/** Grok login floating window — room for full upgrade sheet */
+/** Apple Intelligence / login floating window */
 export const LOGIN_W = 320;
 export const LOGIN_H = 480;
 
