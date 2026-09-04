@@ -40,6 +40,7 @@ import {
 } from "./lib/animCues";
 import {
   flushScheduleToDisk,
+  forgetScheduleIds,
   getDueReminders,
   hydrateReminded,
   hydrateSchedule,
@@ -739,7 +740,15 @@ export default function App() {
       setCalendarLarge(next);
       void resizePanelWindow("calendar", next);
     }).then((u) => unsubs.push(u));
-    void listen("schedule-updated", () => {
+    void listen<{ large?: boolean }>("chat-toggle-size", (ev) => {
+      const next = !!ev.payload?.large;
+      setChatLarge(next);
+      chatLargeRef.current = next;
+      void resizePanelWindow("chat", next);
+    }).then((u) => unsubs.push(u));
+    void listen<{ removed?: string[] }>("schedule-updated", (ev) => {
+      const removed = ev.payload?.removed?.filter(Boolean);
+      if (removed?.length) forgetScheduleIds(removed);
       void reloadScheduleFromDisk().then((events) => {
         setSchedule(events);
         void publishScheduleToCompanion(events);

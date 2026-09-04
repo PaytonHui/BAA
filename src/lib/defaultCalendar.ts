@@ -367,7 +367,7 @@ function seedForYear(year: number): Seed[] {
         key: `hk-${h.m}-${h.d}-${h.title.slice(0, 24)}`,
         date,
         title: h.title,
-        note: "Hong Kong public holiday",
+        note: "Hong Kong general holiday",
       });
     }
   }
@@ -517,6 +517,18 @@ export function isNewJeansDebutDay(monthIndex: number, day: number): boolean {
 export type CalendarDayMark =
   | { kind: "emoji"; value: string; label: string }
   | { kind: "nj-debut-heart"; label: string };
+
+/** True for gazetted Hong Kong general holidays (red date numbers). */
+export function isHongKongGeneralHoliday(
+  year: number,
+  monthIndex: number,
+  day: number
+): boolean {
+  const list = HK_HOLIDAYS[year];
+  if (!list) return false;
+  const m = monthIndex + 1;
+  return list.some((h) => h.m === m && h.d === day);
+}
 
 export function calendarDayMark(
   year: number,

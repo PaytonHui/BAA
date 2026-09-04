@@ -19,14 +19,6 @@ export const STICKERS: Sticker[] = [
   { id: "clap", emoji: "👏", label: "Clap" },
 ];
 
-export const QUICK_REPLIES = [
-  "Hi 🐰",
-  "Love NewJeans 💗",
-  "What's on my calendar?",
-  "Any update of NewJeans 💙💗💛💚💜?",
-  "What's the weather now?",
-];
-
 export function stickerById(id: string): Sticker | undefined {
   return STICKERS.find((s) => s.id === id);
 }

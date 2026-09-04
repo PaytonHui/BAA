@@ -618,20 +618,16 @@ function easeInOutCubic(t: number) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 }
 
-function easeOutCubic(t: number) {
-  return 1 - Math.pow(1 - t, 3);
-}
-
 function easeOutBack(t: number) {
   const c = 1.70158;
   const t1 = t - 1;
   return 1 + c * t1 * t1 * t1 + t1 * t1;
 }
 
-const HOVER_SPIN_SPEED = 1.6;
-const ORBIT_SPIN_SPEED = 2.8;
+const HOVER_SPIN_SPEED = 1.85;
+const ORBIT_SPIN_SPEED = 2.7;
 /** Seconds to ease from rest → full hover/orbit spin (and back down) */
-const SPIN_RAMP_SEC = 0.75;
+const SPIN_RAMP_SEC = 0.45;
 
 /** 6 lit colors in cycle order: white → green → purple → blue → orange → yellow */
 const CYCLE_COLORS = CYCLE_COLOR_HEXES.map((hex) => new THREE.Color(hex));
@@ -1411,8 +1407,9 @@ function ExactLightstick({
       } else {
         hs.blend = Math.max(0, hs.blend - blendStep);
       }
-      // Ease-out cubic on blend: slow start, settles into full speed
-      const ramp = easeOutCubic(hs.blend);
+      // Ease-in-out: slow start, hold, slow stop
+      const b = hs.blend;
+      const ramp = b < 0.5 ? 4 * b * b * b : 1 - Math.pow(-2 * b + 2, 3) / 2;
       hs.speed = hs.peak * ramp;
 
       if (selfSpin || hs.blend > 0.001) {

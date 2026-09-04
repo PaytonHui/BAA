@@ -259,6 +259,12 @@ async function positionNearPet(
   return { x: Math.round(x), y: Math.round(y) };
 }
 
+async function waitFrames(n = 2) {
+  for (let i = 0; i < n; i++) {
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+  }
+}
+
 export async function showPanelWindow(
   kind: PanelKind,
   large = false
@@ -275,10 +281,13 @@ export async function showPanelWindow(
   ]);
   const { w, h, x, y } = sizePos;
   const shown = `${kind}-window-shown`;
+  const prepare = `${kind}-window-prepare`;
 
   if (existing) {
-    // Always hide first so macOS drops the last painted frame (afterimage).
-    // Place while hidden, wait a frame, then show + reveal content.
+    // Blank the webview *while still visible*, then hide — otherwise macOS
+    // keeps the last opaque frame and flashes it on the next show.
+    void emit(prepare, {});
+    await waitFrames(2);
     try {
       await existing.hide();
     } catch {
@@ -292,23 +301,19 @@ export async function showPanelWindow(
       /* ignore */
     }
 
-    // Let compositor commit size/pos while still hidden
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    await waitFrames(2);
 
     try {
       await existing.show();
       await existing.setIgnoreCursorEvents(false);
       await existing.setAlwaysOnTop(true);
       await existing.setVisibleOnAllWorkspaces(true);
-      // Size re-assert forces a clean transparent redraw (kills ghost strip)
-      await existing.setSize(new LogicalSize(w, h));
     } catch {
       /* ignore */
     }
 
     void existing.setFocus().catch(() => undefined);
-    // shown → MacWindowShell blanks one frame then reveals (no stale buffer)
+    await waitFrames(1);
     void emit(shown, { large });
     void emit(`${kind}-window-data`, { large });
     return;
@@ -371,6 +376,9 @@ export async function showPanelWindow(
 export async function hidePanelWindow(kind: PanelKind): Promise<void> {
   const win = await WebviewWindow.getByLabel(LABELS[kind]);
   if (!win) return;
+  // Blank first so the compositor doesn't keep a ghost frame for next open
+  void emit(`${kind}-window-prepare`, {});
+  await waitFrames(2);
   try {
     await win.hide();
   } catch {

@@ -6,12 +6,13 @@ import { PET_H, PET_W } from "../lib/windowLayout";
 /** Cursor rests on pet this long (no click) before orbit */
 const HOVER_MS = 3500;
 const ORBIT_RADIUS = 72; // CSS px
-const ORBIT_SPEED = 2.4; // rad/s peak
+const ORBIT_SPEED = 2.2; // rad/s peak
 /** Ease radius + angular speed from rest → full orbit */
-const ORBIT_RAMP_SEC = 0.85;
+const ORBIT_RAMP_SEC = 0.55;
 
-function easeOutCubic(t: number) {
-  return 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+function easeInOutCubic(t: number) {
+  const x = Math.min(1, Math.max(0, t));
+  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 
 /**
@@ -43,6 +44,7 @@ export function useOrbitHover(opts: {
     typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1
   );
   const posBusyRef = useRef(false);
+  const lastPosRef = useRef({ x: 0, y: 0, ready: false });
   const docBoundRef = useRef(false);
 
   const clearTimer = () => {
@@ -83,6 +85,7 @@ export function useOrbitHover(opts: {
     orbitingRef.current = false;
     rampTRef.current = 0;
     startRadiusRef.current = 0;
+    lastPosRef.current.ready = false;
     setIsHovering(false);
     setIsOrbiting(false);
     if (was) optsRef.current.onOrbitEnd?.();
@@ -110,7 +113,7 @@ export function useOrbitHover(opts: {
 
       // Soft launch: angular velocity eases 0 → full; radius eases start → target
       rampTRef.current = Math.min(1, rampTRef.current + dt / ORBIT_RAMP_SEC);
-      const ease = easeOutCubic(rampTRef.current);
+      const ease = easeInOutCubic(rampTRef.current);
       const speed = ORBIT_SPEED * ease;
       const radiusCss =
         startRadiusRef.current +
@@ -118,18 +121,28 @@ export function useOrbitHover(opts: {
 
       angleRef.current += speed * dt;
 
+      const scale = scaleRef.current;
+      const r = radiusCss * scale;
+      const mx = mouseRef.current.x * scale;
+      const my = mouseRef.current.y * scale;
+      const tx = mx + Math.cos(angleRef.current) * r - (PET_W * scale) / 2;
+      const ty = my + Math.sin(angleRef.current) * r - (PET_H * scale) / 2;
+      const lp = lastPosRef.current;
+      if (!lp.ready) {
+        lp.x = tx;
+        lp.y = ty;
+        lp.ready = true;
+      } else {
+        // Frame-rate independent follow — kills pixel hops from slow setPosition
+        const follow = 1 - Math.exp(-dt * 14);
+        lp.x += (tx - lp.x) * follow;
+        lp.y += (ty - lp.y) * follow;
+      }
+
       if (!posBusyRef.current) {
         posBusyRef.current = true;
-        const scale = scaleRef.current;
-        const r = radiusCss * scale;
-        const mx = mouseRef.current.x * scale;
-        const my = mouseRef.current.y * scale;
-        const x = Math.round(
-          mx + Math.cos(angleRef.current) * r - (PET_W * scale) / 2
-        );
-        const y = Math.round(
-          my + Math.sin(angleRef.current) * r - (PET_H * scale) / 2
-        );
+        const x = Math.round(lp.x);
+        const y = Math.round(lp.y);
         getCurrentWindow()
           .setPosition(new PhysicalPosition(x, y))
           .catch(() => undefined)
@@ -192,12 +205,14 @@ export function useOrbitHover(opts: {
               ORBIT_RADIUS,
               Math.max(8, distCss)
             );
+            lastPosRef.current = { x: pos.x, y: pos.y, ready: true };
             startOrbitLoop();
           })
           .catch(() => {
             if (!orbitingRef.current) return;
             angleRef.current = 0;
             startRadiusRef.current = 8;
+            lastPosRef.current.ready = false;
             startOrbitLoop();
           });
       }, HOVER_MS);

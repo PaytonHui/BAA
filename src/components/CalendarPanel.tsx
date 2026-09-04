@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { calendarDayMark } from "../lib/defaultCalendar";
+import {
+  calendarDayMark,
+  isDefaultCalendarId,
+  isHongKongGeneralHoliday,
+} from "../lib/defaultCalendar";
 import { IosTimePicker } from "./IosTimePicker";
 import { resizeCalendarForComposer } from "../lib/panelWindow";
 import {
@@ -48,6 +52,8 @@ interface CalendarPanelProps {
   onAdd?: (input: ManualScheduleInput) => void;
   /** Update an existing plan (edit from context menu) */
   onUpdate?: (id: string, input: ManualScheduleInput) => void;
+  /** Jump month + selected day (e.g. after chat marks a plan) */
+  focusDate?: string | null;
 }
 
 const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
@@ -77,11 +83,22 @@ export function CalendarPanel({
   allowManualCreate = false,
   onAdd,
   onUpdate,
+  focusDate = null,
 }: CalendarPanelProps) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
   const [selected, setSelected] = useState(todayKey());
+
+  useEffect(() => {
+    if (!focusDate || !/^\d{4}-\d{2}-\d{2}$/.test(focusDate)) return;
+    setSelected(focusDate);
+    const [y, m] = focusDate.split("-").map(Number);
+    if (y && m >= 1 && m <= 12) {
+      setYear(y);
+      setMonth(m - 1);
+    }
+  }, [focusDate]);
   const [title, setTitle] = useState("");
   const [time, setTime] = useState(defaultHalfHourTime);
   const [endTime, setEndTime] = useState(() =>
@@ -226,12 +243,19 @@ export function CalendarPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [addOpen, ctxMenu, cancelComposer]);
 
-  // Close context menu on outside click
+  // Close context menu on outside click (delay so the opening click doesn't close it)
   useEffect(() => {
     if (!ctxMenu) return;
     const close = () => setCtxMenu(null);
-    window.addEventListener("click", close);
-    return () => window.removeEventListener("click", close);
+    const t = window.setTimeout(() => {
+      window.addEventListener("click", close);
+      window.addEventListener("pointerdown", close);
+    }, 80);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener("click", close);
+      window.removeEventListener("pointerdown", close);
+    };
   }, [ctxMenu]);
 
   const catsByDate = useMemo(() => categoriesByDate(events), [events]);
@@ -541,12 +565,19 @@ export function CalendarPanel({
             const primaryMeta = primary ? CATEGORY_META[primary] : null;
             // Member heart / Debut gradient heart / user bunny replace day number
             const dayMark = calendarDayMark(year, month, day);
+            const hkHoliday = isHongKongGeneralHoliday(year, month, day);
             return (
               <button
                 key={key}
                 type="button"
                 onClick={(e) => onDayClick(key, e)}
-                title={dayMark ? dayMark.label : undefined}
+                title={
+                  dayMark
+                    ? dayMark.label
+                    : hkHoliday
+                      ? "Hong Kong general holiday"
+                      : undefined
+                }
                 className={`relative ${dayH} rounded-md ${dayText} font-semibold transition border flex flex-col items-center justify-center gap-0 leading-none ${
                   isSel
                     ? "bg-[#B8EF9A] border-neutral-800/80 text-neutral-900 shadow-sm"
@@ -600,7 +631,13 @@ export function CalendarPanel({
                     {dayMark.value}
                   </span>
                 ) : (
-                  <span className="leading-none">{day}</span>
+                  <span
+                    className={`leading-none ${
+                      hkHoliday ? "text-[#E11D48]" : ""
+                    }`}
+                  >
+                    {day}
+                  </span>
                 )}
                 {/* Type emoji(s) under the date number */}
                 {dayCats.length > 0 && !dayMark && (
@@ -649,6 +686,7 @@ export function CalendarPanel({
           dayEvents.map((ev, idx) => {
             const cat = eventCategory(ev);
             const meta = CATEGORY_META[cat];
+            const locked = isDefaultCalendarId(ev.id);
             return (
               <div key={ev.id} className="flex items-start gap-1.5 pr-1">
                 <div className="w-8 shrink-0 pt-0.5">
@@ -673,6 +711,7 @@ export function CalendarPanel({
                     <div
                       data-plan-card
                       onContextMenu={(e) => {
+                        if (locked) return;
                         e.preventDefault();
                         e.stopPropagation();
                         // Position menu inside panel (avoid going off-screen)
@@ -688,8 +727,15 @@ export function CalendarPanel({
                           y: e.clientY - rect.top + 4,
                         });
                       }}
-                      onDoubleClick={() => openEdit(ev)}
-                      className="relative max-w-[90%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)] cursor-context-menu"
+                      onClick={() => {
+                        if (!locked) openEdit(ev);
+                      }}
+                      onDoubleClick={() => {
+                        if (!locked) openEdit(ev);
+                      }}
+                      className={`relative max-w-[90%] rounded-[18px] rounded-tl-[6px] border border-neutral-800/80 bg-[#B8EF9A] text-neutral-900 px-3 py-2 text-[12px] leading-snug shadow-[0_1px_0_rgba(0,0,0,0.04)] ${
+                        locked ? "" : "cursor-pointer"
+                      }`}
                     >
                       <div className="flex items-center gap-1 flex-wrap">
                         {formatTimeRange(ev.time, ev.endTime) && (
@@ -737,7 +783,10 @@ export function CalendarPanel({
                           <button
                             type="button"
                             className="w-full text-left px-3 py-1.5 text-[12px] font-semibold text-rose-600 hover:bg-rose-50"
-                            onClick={() => {
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
                               onRemove(ev.id);
                               setCtxMenu(null);
                               if (editingId === ev.id) {
@@ -751,14 +800,38 @@ export function CalendarPanel({
                         </div>
                       )}
                     </div>
+                    {!locked && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          openEdit(ev);
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="shrink-0 mb-0.5 w-8 h-8 rounded-full border border-neutral-200 bg-white text-[14px] hover:bg-black/[0.04]"
+                        title="Edit plan"
+                        aria-label="Edit plan"
+                      >
+                        ✏️
+                      </button>
+                    )}
+                    {!locked && (
                     <button
                       type="button"
-                      onClick={() => onRemove(ev.id)}
-                      className="shrink-0 mb-0.5 w-6 h-6 rounded-full border border-neutral-200 bg-white text-[10px] text-neutral-400 hover:text-rose-500 hover:border-rose-200"
-                      title="Delete"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onRemove(ev.id);
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="shrink-0 mb-0.5 w-8 h-8 rounded-full border border-neutral-200 bg-white text-[14px] text-rose-500 hover:bg-rose-50 hover:border-rose-200"
+                      title="Delete plan"
+                      aria-label="Delete plan"
                     >
-                      ✕
+                      🗑
                     </button>
+                    )}
                   </div>
                 </div>
               </div>

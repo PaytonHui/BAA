@@ -153,18 +153,30 @@ export function MacWindowShell({
       return;
     }
 
-    let unlisten: (() => void) | undefined;
+    const prepareEvent = shownEvent.replace(/-shown$/, "-prepare");
+    const unsubs: Array<() => void> = [];
     let cancelled = false;
+
+    void listen(prepareEvent, () => {
+      if (cancelled) return;
+      if (enterRafRef.current) {
+        cancelAnimationFrame(enterRafRef.current);
+        enterRafRef.current = 0;
+      }
+      openSessionRef.current = false;
+      setPhase("pre");
+      phaseRef.current = "pre";
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unsubs.push(fn);
+    });
 
     void listen(shownEvent, () => {
       if (cancelled) return;
       playEnter(true);
     }).then((fn) => {
-      if (cancelled) {
-        fn();
-        return;
-      }
-      unlisten = fn;
+      if (cancelled) fn();
+      else unsubs.push(fn);
     });
 
     // Boot safety: only if still blank (missed shown while mounting)
@@ -172,11 +184,11 @@ export function MacWindowShell({
       if (phaseRef.current === "pre" && !openSessionRef.current) {
         playEnter(true);
       }
-    }, 120);
+    }, 180);
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unsubs.forEach((u) => u());
       window.clearTimeout(fallback);
       if (enterRafRef.current) {
         cancelAnimationFrame(enterRafRef.current);

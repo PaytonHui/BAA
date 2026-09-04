@@ -349,10 +349,6 @@ textarea {
   .mac-window-out {
     animation-duration: 0.01ms !important;
   }
-  .mac-window-pre {
-    opacity: 1;
-    transform: none;
-  }
 }
 
 .baa-ios-btn {

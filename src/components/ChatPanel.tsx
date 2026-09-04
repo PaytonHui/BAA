@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChatAttachment, ChatMessage } from "../types";
 import type { BubbleSide } from "../lib/windowLayout";
-import { QUICK_REPLIES, STICKERS, stickerById } from "../lib/stickers";
-import { playPop, playSticker } from "../lib/sounds";
+import { stickerById } from "../lib/stickers";
+import { playPop } from "../lib/sounds";
 import {
   canAddMore,
   fileToAttachment,
@@ -17,8 +17,12 @@ interface ChatPanelProps {
   error: string | null;
   large?: boolean;
   onToggleSize?: () => void;
-  onSend: (text: string, attachments?: ChatAttachment[]) => void;
-  onSendSticker: (stickerId: string, emoji: string) => void;
+  onSend: (
+    text: string,
+    attachments?: ChatAttachment[],
+    calendarMode?: boolean
+  ) => void;
+  onSendSticker?: (stickerId: string, emoji: string) => void;
   onClose: () => void;
   bubbleSide?: BubbleSide;
 }
@@ -80,11 +84,10 @@ export function ChatPanel({
   large = false,
   onToggleSize,
   onSend,
-  onSendSticker,
   onClose,
 }: ChatPanelProps) {
   const [text, setText] = useState("");
-  const [showStickers, setShowStickers] = useState(false);
+  const [calendarMode, setCalendarMode] = useState(false);
   const [pending, setPending] = useState<ChatAttachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -104,7 +107,7 @@ export function ChatPanel({
       top: listRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages, loading, showStickers, pending]);
+  }, [messages, loading, calendarMode, pending]);
 
   // Parent may keep us mounted during exit animation (open=false briefly)
   // Always render when parent shows us; `open` still gates focus.
@@ -133,27 +136,14 @@ export function ChatPanel({
     const v = text.trim();
     if ((!v && pending.length === 0) || loading) return;
     playPop();
-    onSend(v || (pending.length ? "What do you think?" : ""), [...pending]);
+    onSend(
+      v || (pending.length ? "What do you think?" : ""),
+      [...pending],
+      calendarMode
+    );
     setText("");
     setPending([]);
-    setShowStickers(false);
     setAttachError(null);
-  };
-
-  const sendQuick = (q: string) => {
-    if (loading) return;
-    playPop();
-    onSend(q, pending.length ? [...pending] : undefined);
-    setText("");
-    setPending([]);
-    setShowStickers(false);
-  };
-
-  const sendSticker = (id: string, emoji: string) => {
-    if (loading) return;
-    playSticker();
-    onSendSticker(id, emoji);
-    setShowStickers(false);
   };
 
   // Fill the shell (window already sizes the panel) so the composer is never
@@ -218,11 +208,17 @@ export function ChatPanel({
           )}
         </div>
 
-        {onToggleSize && !loading && (
+        {onToggleSize && (
           <button
             type="button"
-            onClick={onToggleSize}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleSize();
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
             className="shrink-0 text-[10px] px-2 py-1 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700 font-semibold"
+            title={large ? "Smaller chat (Hanni)" : "Bigger chat (Hyein)"}
           >
             {large ? "Hanni" : "Hyein"}
           </button>
@@ -340,37 +336,10 @@ export function ChatPanel({
         )}
       </div>
 
-      {/* —— Quick replies —— */}
-      {!loading && (
-        <div className="shrink-0 px-2 pt-1 pb-0.5 flex gap-1 overflow-x-auto chat-scroll bg-[#F7F7F8] border-t border-black/[0.04]">
-          {QUICK_REPLIES.map((q) => (
-            <button
-              key={q}
-              type="button"
-              onClick={() => sendQuick(q)}
-              className="shrink-0 text-[10px] font-medium px-2 py-1 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-700 whitespace-nowrap shadow-sm"
-            >
-              {q}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* —— Sticker tray —— */}
-      {showStickers && (
-        <div className="shrink-0 px-2 py-1.5 grid grid-cols-5 gap-1 bg-white border-t border-black/[0.06]">
-          {STICKERS.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              disabled={loading}
-              onClick={() => sendSticker(s.id, s.emoji)}
-              className="h-8 rounded-lg hover:bg-neutral-100 text-[20px] leading-none flex items-center justify-center disabled:opacity-40"
-            >
-              {s.emoji}
-            </button>
-          ))}
-        </div>
+      {calendarMode && (
+        <p className="shrink-0 px-3 py-1 text-[10px] font-medium text-[#007AFF] bg-[#007AFF]/8 border-t border-[#007AFF]/15">
+          Calendar mode — send to mark a plan
+        </p>
       )}
 
       {/* —— Pending attachments preview —— */}
@@ -444,15 +413,23 @@ export function ChatPanel({
         </button>
         <button
           type="button"
-          onClick={() => setShowStickers((v) => !v)}
-          className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-base ${
-            showStickers
-              ? "bg-neutral-200"
+          onClick={() => setCalendarMode((v) => !v)}
+          className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-[15px] ${
+            calendarMode
+              ? "bg-[#007AFF] text-white shadow-sm"
               : "bg-neutral-100 hover:bg-neutral-200"
           }`}
-          aria-label="Stickers"
+          aria-label={
+            calendarMode ? "Calendar mode on" : "Calendar mode off"
+          }
+          aria-pressed={calendarMode}
+          title={
+            calendarMode
+              ? "Calendar mode — tap to chat with Binky"
+              : "Tap to mark what you type on the calendar"
+          }
         >
-          🐰
+          📅
         </button>
         <input
           ref={inputRef}
@@ -474,7 +451,9 @@ export function ChatPanel({
               void addFiles(files);
             }
           }}
-          placeholder="Message or drop files…"
+          placeholder={
+            calendarMode ? "Plan to mark, e.g. next wed 7pm dinner…" : "Message…"
+          }
           className="flex-1 min-w-0 h-9 rounded-full border border-neutral-200 bg-[#F7F7F8] px-3.5 text-[12px] text-neutral-900 placeholder:text-neutral-400 outline-none focus:border-neutral-400 focus:bg-white"
           disabled={loading}
         />

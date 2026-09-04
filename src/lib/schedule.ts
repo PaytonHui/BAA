@@ -209,12 +209,79 @@ export function addMinutesToHhmm(raw: string, deltaMin: number): string {
 }
 
 const STORAGE_KEY = "baa-schedule";
+const DELETED_KEY = "baa-schedule-deleted-v1";
 
 /** In-memory cache (per webview). Disk is the source of truth across restarts. */
 let memoryCache: ScheduleEvent[] | null = null;
 let hydratePromise: Promise<ScheduleEvent[]> | null = null;
 /** Bumps on every local write — used to avoid clobbering a just-added plan. */
 let scheduleWriteGen = 0;
+/** Ids the user deleted — never resurrect from another window's cache. */
+const deletedIds = new Set<string>();
+
+function loadDeletedIds() {
+  try {
+    const raw = localStorage.getItem(DELETED_KEY);
+    if (!raw) return;
+    const arr = JSON.parse(raw) as unknown;
+    if (Array.isArray(arr)) {
+      for (const id of arr) {
+        if (typeof id === "string" && id) deletedIds.add(id);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistDeletedIds() {
+  try {
+    localStorage.setItem(DELETED_KEY, JSON.stringify([...deletedIds]));
+  } catch {
+    /* ignore */
+  }
+}
+
+function dropDeleted<T extends { id?: string }>(list: T[] | null | undefined): T[] {
+  if (!list?.length) return [];
+  if (!deletedIds.size) return list.slice();
+  return list.filter((e) => !e?.id || !deletedIds.has(e.id));
+}
+
+/** Forget ids in this webview so hydrate/merge cannot bring them back. */
+export function forgetScheduleIds(ids: string[]) {
+  if (!ids.length) return;
+  loadDeletedIds();
+  for (const id of ids) {
+    if (id) deletedIds.add(id);
+  }
+  persistDeletedIds();
+  if (memoryCache) {
+    memoryCache = dropDeleted(memoryCache);
+    writeLocalStorage(memoryCache);
+  } else {
+    writeLocalStorage(dropDeleted(readLocalStorage()));
+  }
+  scheduleWriteGen += 1;
+  if (isTauri()) {
+    void invoke("remember_deleted_ids", { ids }).catch(() => undefined);
+  }
+}
+
+async function pullDiskDeletedIds() {
+  if (!isTauri()) return;
+  try {
+    const ids = await invoke<string[]>("load_deleted_ids");
+    if (Array.isArray(ids)) {
+      for (const id of ids) {
+        if (id) deletedIds.add(id);
+      }
+      persistDeletedIds();
+    }
+  } catch {
+    /* optional */
+  }
+}
 
 /**
  * Merge event lists by id. Prefer higher createdAt (newer edit wins).
@@ -230,6 +297,7 @@ function mergeByIdPreferNewer(
     if (!list?.length) continue;
     for (const e of list) {
       if (!e?.id || !e.date || !e.title) continue;
+      if (deletedIds.has(e.id)) continue;
       const prev = byId.get(e.id);
       if (!prev) {
         byId.set(e.id, e);
@@ -323,8 +391,12 @@ function isTauri(): boolean {
  * Call `hydrateSchedule()` on app/window start so disk data is pulled in.
  */
 export function loadSchedule(): ScheduleEvent[] {
-  if (memoryCache) return memoryCache;
-  const local = readLocalStorage();
+  loadDeletedIds();
+  if (memoryCache) {
+    memoryCache = dropDeleted(memoryCache);
+    return memoryCache;
+  }
+  const local = dropDeleted(readLocalStorage());
   memoryCache = local;
   return local;
 }
@@ -435,10 +507,11 @@ export async function saveScheduleAsync(
   memoryCache = events;
   writeLocalStorage(events);
   try {
+    loadDeletedIds();
     let toWrite =
       mode === "replace"
-        ? mergeByIdPreferNewer(events)
-        : await unionWithDisk(events);
+        ? dropDeleted(mergeByIdPreferNewer(events))
+        : dropDeleted(await unionWithDisk(events));
     // If a newer write landed while we merged, prefer that memory
     if (scheduleWriteGen !== gen && memoryCache) {
       toWrite =
@@ -552,9 +625,13 @@ export async function hydrateSchedule(): Promise<ScheduleEvent[]> {
       return withDefaults(local);
     }
     try {
+      loadDeletedIds();
+      await pullDiskDeletedIds();
       const disk = await loadDiskList();
       // Union disk + localStorage + memory — never clobber newer local plans
-      const merged = mergeByIdPreferNewer(disk, local, memoryCache);
+      const merged = dropDeleted(
+        mergeByIdPreferNewer(disk, local, memoryCache)
+      );
       const withDef = withDefaults(merged);
       writeLocalStorage(withDef);
       // If local/memory had anything disk didn't, push union back to disk
@@ -596,14 +673,18 @@ export async function reloadScheduleFromDisk(): Promise<ScheduleEvent[]> {
     return withDefaults(loadSchedule());
   }
   try {
+    loadDeletedIds();
+    await pullDiskDeletedIds();
     const disk = await loadDiskList();
     // If user saved again while we were loading, trust the latest memory
     if (scheduleWriteGen !== genAtStart && memoryCache) {
       return withDefaults(
-        mergeByIdPreferNewer(disk, localSnap, memoryCache)
+        dropDeleted(mergeByIdPreferNewer(disk, localSnap, memoryCache))
       );
     }
-    const merged = mergeByIdPreferNewer(disk, localSnap, memSnap);
+    const merged = dropDeleted(
+      mergeByIdPreferNewer(disk, localSnap, memSnap)
+    );
     writeLocalStorage(merged);
     memoryCache = merged;
     return withDefaults(merged);
@@ -1264,16 +1345,32 @@ export function extractScheduleFromReply(raw: string): {
     });
   };
 
-  const message = kept
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  const message = stripScheduleMachineText(kept.join("\n"));
 
   return {
-    message: message || raw.trim(),
+    message,
     events: dedupe(events),
     cancels: dedupe(cancels),
   };
+}
+
+/** Remove machine calendar lines so they never show in the chat bubble. */
+export function stripScheduleMachineText(raw: string): string {
+  let text = typeof raw === "string" ? raw : String(raw ?? "");
+  // Fenced JSON
+  text = text.replace(/```(?:json)?\s*[\s\S]*?```/gi, " ");
+  // Label + array, even if JSON is messy / truncated
+  text = text.replace(
+    /\bCANCEL_SCHEDULE_JSON\s*:?\s*\[[\s\S]*?\]/gi,
+    " "
+  );
+  text = text.replace(/\bSCHEDULE_JSON\s*:?\s*\[[\s\S]*?\]/gi, " ");
+  text = text.replace(/\bCANCEL_SCHEDULE_JSON\s*:?[^\n]*/gi, " ");
+  text = text.replace(/\bSCHEDULE_JSON\s*:?[^\n]*/gi, " ");
+  // Bare leftover tags
+  text = text.replace(/\bCANCEL_SCHEDULE_JSON\b/gi, " ");
+  text = text.replace(/\bSCHEDULE_JSON\b/gi, " ");
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /** Event flyer / race paste with explicit multi-day dates (CN or EN). */
@@ -1304,9 +1401,19 @@ function isGenericScheduleTitle(title: string): boolean {
     t === "plan" ||
     t === "reminder" ||
     t === "schedule" ||
+    t === "on" ||
+    t === "today" ||
+    t === "tonight" ||
+    t === "what's on today" ||
+    t === "whats on today" ||
+    t === "what's on" ||
+    t === "whats on" ||
+    t === "me" ||
+    t === "remind me" ||
+    t === "remind me tonight" ||
+    t === "tonight" ||
     t === "活動" ||
     t === "事件" ||
-    t === "reminder" ||
     t === "todo"
   );
 }
@@ -1344,7 +1451,43 @@ export function resolveScheduleEventsFromChat(
           e.date <= user.endDate)
     );
 
-  if (modelGeneric || modelMissingRange || modelMissesFlyerDates) {
+  const userWeekday = weekdayFromText(userText);
+  const modelDateWrong =
+    !!user.date &&
+    !modelEvents.some((e) => e.date === user.date) &&
+    (!!userWeekday ||
+      /\b(today|tonight|tomorrow|tmr|tmrw)\b/i.test(userText) ||
+      /(聽日|明天|今日|今天|今晚)/.test(userText));
+  // "7pm dinner" must not become the 7th of the month
+  const hourAsDay = modelEvents.some((e) => {
+    const spoken = userText.match(/\b(\d{1,2})\s*(am|pm)\b/i);
+    if (!spoken) return false;
+    const spokenHour = parseInt(spoken[1], 10);
+    const dayNum = parseInt(e.date.slice(8, 10), 10);
+    return spokenHour === dayNum && e.date !== user.date;
+  });
+
+  if (
+    modelGeneric ||
+    modelMissingRange ||
+    modelMissesFlyerDates ||
+    modelDateWrong ||
+    hourAsDay
+  ) {
+    if (modelDateWrong || hourAsDay) {
+      const model = modelEvents[0];
+      return [
+        {
+          ...model,
+          date: user.date,
+          endDate: user.endDate || model.endDate,
+          time: model.time || user.time,
+          title: isGenericScheduleTitle(model.title) ? user.title : model.title,
+          note: model.note || user.note,
+          category: model.category || user.category,
+        },
+      ];
+    }
     return fromUser;
   }
 
@@ -1424,10 +1567,68 @@ function hasScheduleMarkIntent(text: string): boolean {
   );
 }
 
+/**
+ * Bare “remind me tonight / today” — recap existing plans, not “add an event”.
+ * “Remind me tonight to call mom” still counts as adding (has a task).
+ */
+export function looksLikeScheduleBriefing(text: string): boolean {
+  const t = text.toLowerCase().trim().replace(/[.!?…]+$/g, "").trim();
+  if (!t) return false;
+  if (hasPlanActivity(text)) return false;
+  if (
+    /^(?:please\s+|pls\s+|can you\s+|could you\s+)?(?:remind me|提醒我|提我)(?:\s+(?:of|about))?(?:\s+(?:my|the))?(?:\s+(?:plans?|schedule|calendar))?\s*(?:tonight|today|this evening|later|今晚|今日|今天)\s*$/i.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\bwhat(?:'s|s|\s+is|\s+do i have|\s+have i got)?\s+(?:on\s+)?(?:tonight|this evening)\b/.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  if (/(今晚有咩|今晚行程|今晚安排|今晚約)/.test(text) && !hasPlanActivity(text)) {
+    return true;
+  }
+  return false;
+}
+
+/** Asking what's already on the calendar (not adding a new plan). */
+export function looksLikeCalendarAsk(text: string): boolean {
+  const t = text.toLowerCase().trim();
+  if (!t) return false;
+  if (looksLikeScheduleBriefing(text)) return true;
+  if (
+    /\bwhat(?:'s|s|\s+is)?\s+on\b/.test(t) ||
+    /\banything\s+on\b/.test(t) ||
+    /\bshow\s+(?:my\s+)?(?:calendar|schedule|plans?)\b/.test(t) ||
+    /\b(?:check|see|list|view)\s+(?:my\s+)?(?:calendar|schedule|plans?)\b/.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  if (
+    /\b(calendar|schedule|agenda|plans?)\b/.test(t) &&
+    /\b(today|tonight|tomorrow|now)\b/.test(t) &&
+    !hasScheduleMarkIntent(text)
+  ) {
+    return true;
+  }
+  if (/(日曆有咩|今日有咩|今日行程|今日安排|有咩約|行程表)/.test(text)) {
+    return true;
+  }
+  return false;
+}
+
 /** User is asking to mark / schedule something — or pasted event flyer text */
 export function looksLikeScheduleRequest(text: string): boolean {
   const t = text.toLowerCase().trim();
   if (!t) return false;
+  // “What's on today?” is a lookup, not “add an event called on”
+  if (looksLikeCalendarAsk(text)) return false;
   // Explicit mark / schedule language (EN mark + time/calendar, or CJK 記低…)
   if (hasScheduleMarkIntent(text)) {
     if (
@@ -1481,6 +1682,42 @@ function nextWeekdayYmd(today: string, weekday: number): string {
   return addDaysYmd(today, delta);
 }
 
+/** "wed" / "next wed" / "nest wed" (typo) / 星期三 → 0–6, or null */
+export function weekdayFromText(
+  text: string
+): { day: number; next: boolean } | null {
+  const t = text.toLowerCase();
+  const next = /\b(next|nest)\b/.test(t);
+  const names: Array<[RegExp, number]> = [
+    [/\b(sun(?:day)?)\b/, 0],
+    [/\b(mon(?:day)?)\b/, 1],
+    [/\b(tue(?:s(?:day)?)?)\b/, 2],
+    [/\b(wed(?:nesday)?)\b/, 3],
+    [/\b(thu(?:r(?:s(?:day)?)?)?)\b/, 4],
+    [/\b(fri(?:day)?)\b/, 5],
+    [/\b(sat(?:urday)?)\b/, 6],
+  ];
+  for (const [re, day] of names) {
+    if (re.test(t)) return { day, next };
+  }
+  const cn = text.match(/(?:星期|週|周|礼拜)([一二三四五六日天])/);
+  if (cn) {
+    const map: Record<string, number> = {
+      日: 0,
+      天: 0,
+      一: 1,
+      二: 2,
+      三: 3,
+      四: 4,
+      五: 5,
+      六: 6,
+    };
+    const day = map[cn[1]];
+    if (day !== undefined) return { day, next };
+  }
+  return null;
+}
+
 /**
  * When Grok forgets SCHEDULE_JSON but the user clearly asked to mark something
  * (or pasted an event flyer), invent a best-effort event from the user message.
@@ -1493,8 +1730,6 @@ export function fallbackEventsFromUserRequest(
   if (!looksLikeScheduleRequest(userText)) return [];
   let date = today;
   let endDate: string | undefined;
-  const lower = userText.toLowerCase();
-
   // —— Multi-day / flyer dates (prefer range if present) ——
   const cnDates = [
     ...userText.matchAll(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/g),
@@ -1607,43 +1842,17 @@ export function fallbackEventsFromUserRequest(
         date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
       }
     } else {
-      const days = [
-        "sunday",
-        "monday",
-        "tuesday",
-        "wednesday",
-        "thursday",
-        "friday",
-        "saturday",
-      ];
-      let matchedWeekday = false;
-      for (let i = 0; i < days.length; i++) {
-        if (new RegExp(`\\b${days[i]}\\b`, "i").test(lower)) {
-          date = nextWeekdayYmd(today, i);
-          matchedWeekday = true;
-          break;
-        }
-      }
-      // 星期一…日 / 週一…日 (0=Sun in JS Date)
-      if (!matchedWeekday) {
-        const cnWd = userText.match(
-          /(?:星期|週|周|礼拜)([一二三四五六日天])/
-        );
-        if (cnWd) {
-          const map: Record<string, number> = {
-            日: 0,
-            天: 0,
-            一: 1,
-            二: 2,
-            三: 3,
-            四: 4,
-            五: 5,
-            六: 6,
-          };
-          const wd = map[cnWd[1]];
-          if (wd !== undefined) date = nextWeekdayYmd(today, wd);
-        }
-      }
+      const wd = weekdayFromText(userText);
+      if (wd) date = nextWeekdayYmd(today, wd.day);
+    }
+  }
+
+  // Weekday wins over a guessed numeric date when user said "next wed" etc.
+  {
+    const wd = weekdayFromText(userText);
+    if (wd && (wd.next || !allDates.length)) {
+      date = nextWeekdayYmd(today, wd.day);
+      endDate = undefined;
     }
   }
 
@@ -1763,7 +1972,11 @@ export function fallbackEventsFromUserRequest(
         " "
       )
       .replace(
-        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.)\b/gi,
+        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|next|nest|this)\b/gi,
+        " "
+      )
+      .replace(
+        /\b(sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?)\b/gi,
         " "
       )
       .replace(/(聽日|明天|今日|今天|今晚|後日|後天|翌日)/g, " ")

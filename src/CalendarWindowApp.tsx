@@ -19,6 +19,7 @@ import { resizeCalendarForComposer } from "./lib/panelWindow";
 import {
   applyScheduleUpserts,
   flushScheduleToDisk,
+  forgetScheduleIds,
   hydrateSchedule,
   loadSchedule,
   reloadScheduleFromDisk,
@@ -29,6 +30,9 @@ import {
 
 export default function CalendarWindowApp() {
   const [events, setEvents] = useState<ScheduleEvent[]>(() => loadSchedule());
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
+  const [focusDate, setFocusDate] = useState<string | null>(null);
   const [large, setLarge] = useState(false);
   const largeRef = useRef(large);
   largeRef.current = large;
@@ -38,7 +42,7 @@ export default function CalendarWindowApp() {
   const writingRef = useRef(false);
 
   const refresh = useCallback(() => {
-    if (writingRef.current) return;
+    if (writingRef.current || formOpenRef.current) return;
     void reloadScheduleFromDisk().then(setEvents);
   }, []);
 
@@ -82,10 +86,31 @@ export default function CalendarWindowApp() {
         void resizeCalendarForComposer(false, next).catch(() => undefined);
       }
     }).then((u) => unsubs.push(u));
-    void listen("schedule-updated", () => {
+    void listen<{
+      dates?: string[];
+      added?: ScheduleEvent[];
+      removed?: string[];
+    }>("schedule-updated", (ev) => {
+      const removed = ev.payload?.removed?.filter(Boolean) ?? [];
+      if (removed.length) {
+        forgetScheduleIds(removed);
+        setEvents((prev) => prev.filter((e) => !removed.includes(e.id)));
+      }
       // Don't clobber a plan we just added before disk catch-up
       if (writingRef.current) return;
-      refresh();
+      const added = (ev.payload?.added ?? []).filter(
+        (e) => e?.id && !removed.includes(e.id)
+      );
+      if (added.length) {
+        setEvents((prev) => {
+          const ids = new Set(prev.map((e) => e.id));
+          const extra = added.filter((e) => !ids.has(e.id));
+          return extra.length ? [...prev, ...extra] : prev;
+        });
+      }
+      const jump = ev.payload?.dates?.[0] || added[0]?.date;
+      if (jump && !removed.length) setFocusDate(jump);
+      window.setTimeout(() => refresh(), 500);
     }).then((u) => unsubs.push(u));
     // Main window asks every panel to flush memory → disk before Sync
     void listen("schedule-flush-request", () => {
@@ -173,7 +198,11 @@ export default function CalendarWindowApp() {
   }, []);
 
   const onRemove = useCallback((id: string) => {
-    const next = loadSchedule().filter((e) => e.id !== id);
+    forgetScheduleIds([id]);
+    const next = eventsRef.current
+      .concat(loadSchedule())
+      .filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i)
+      .filter((e) => e.id !== id);
     setEvents(next);
     writingRef.current = true;
     void (async () => {
@@ -184,7 +213,7 @@ export default function CalendarWindowApp() {
         saveSchedule(next, "replace");
       }
       void publishScheduleToCompanion(next);
-      void emit("schedule-updated", {}).catch(() => undefined);
+      void emit("schedule-updated", { removed: [id] }).catch(() => undefined);
       writingRef.current = false;
     })();
   }, []);
@@ -236,7 +265,9 @@ export default function CalendarWindowApp() {
           category: input.category,
         })
       );
-      const prev = loadSchedule();
+      const prev = eventsRef.current
+        .concat(loadSchedule())
+        .filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i);
       const { next, added, updated } = applyScheduleUpserts(prev, drafts);
       if (!added.length && !updated.length) {
         // Force-append any dates that somehow didn't land
@@ -273,21 +304,36 @@ export default function CalendarWindowApp() {
 
   const onUpdate = useCallback(
     (id: string, input: ManualScheduleInput) => {
-      const prev = loadSchedule();
-      const next = prev.map((e) =>
-        e.id === id
-          ? {
-              ...e,
-              date: input.date,
-              title: input.title,
-              time: input.time,
-              endTime: input.endTime,
-              note: input.note,
-              category: input.category,
-              createdAt: Date.now(),
-            }
-          : e
-      );
+      const prev = eventsRef.current
+        .concat(loadSchedule())
+        .filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i);
+      let found = false;
+      const next = prev.map((e) => {
+        if (e.id !== id) return e;
+        found = true;
+        return {
+          ...e,
+          date: input.date,
+          title: input.title,
+          time: input.time,
+          endTime: input.endTime,
+          note: input.note,
+          category: input.category,
+          createdAt: Date.now(),
+        };
+      });
+      if (!found) {
+        next.push({
+          id,
+          date: input.date,
+          title: input.title,
+          time: input.time,
+          endTime: input.endTime,
+          note: input.note,
+          category: input.category,
+          createdAt: Date.now(),
+        });
+      }
       persist(next);
     },
     [persist]
@@ -313,6 +359,7 @@ export default function CalendarWindowApp() {
           open
           events={events}
           large={large}
+          focusDate={focusDate}
           onToggleSize={() => void onToggleSize()}
           onRemove={onRemove}
           onClose={() => void close()}

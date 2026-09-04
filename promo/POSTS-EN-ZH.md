@@ -1,6 +1,6 @@
 # BAA social posts — English + 繁體中文
 
-**Download:** https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+**Download:** https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 **Assets folder:** `~/BAA/promo/`
 
 | File | Use |
@@ -29,7 +29,7 @@ Hey Bunnies 🐰 I made a little desktop friend for us.
 💗 Member birthdays + Debut Day (22 Jul) color heart  
 
 Apple Silicon · free to try  
-🔗 https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+🔗 https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 
 Built with love for every Bunny.  
 #NewJeans #Bunnies #BAA #MacApp #DesktopPet
@@ -49,7 +49,7 @@ Hey Bunnies 🐰
 💗 成員生日 + 出道日（7/22）五色漸層心  
 
 支援 Apple Silicon · 免費試用  
-🔗 https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+🔗 https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 
 為每一位 Bunny 用心做嘅。  
 #NewJeans #Bunnies #BAA #MacApp #桌面寵物
@@ -62,7 +62,7 @@ I built a NewJeans lightstick for your Mac desktop 🐰✨
 
 BAA = cute pet + free calendar + on-device Apple Intelligence chat  
 Download (Apple Silicon):  
-https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 
 #NewJeans #Bunnies #BAA
 
@@ -74,7 +74,7 @@ https://github.com/PaytonHui/BAA/releases/tag/v0.2.0
 
 BAA＝可愛寵物＋免費日曆＋機內 Apple Intelligence 傾偈  
 下載（Apple Silicon）：  
-https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 
 #NewJeans #Bunnies #BAA
 
@@ -89,7 +89,7 @@ Add your own plans · Sync to Calendar
 
 Chat with Binky uses on-device Apple Intelligence — no API key, nothing leaves your Mac.  
 
-v0.2.0 → https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+v0.2.1 → https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 #NewJeans #Bunnies #BAA
 
 ---
@@ -103,7 +103,7 @@ v0.2.0 → https://github.com/PaytonHui/BAA/releases/tag/v0.2.0
 
 同 Binky 傾偈用機內 Apple Intelligence — 唔使 API key，資料唔會離開你部 Mac。  
 
-v0.2.0 → https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+v0.2.1 → https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 #NewJeans #Bunnies #BAA
 
 ---
@@ -113,7 +113,7 @@ v0.2.0 → https://github.com/PaytonHui/BAA/releases/tag/v0.2.0
 6s of Binky on the desktop — soft glow, always with you 🐰  
 
 BAA for Mac (Apple Silicon)  
-https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 
 #NewJeans #Bunnies #DesktopPet
 
@@ -124,7 +124,7 @@ https://github.com/PaytonHui/BAA/releases/tag/v0.2.0
 Binky 喺桌面輕輕發光 🐰  
 
 BAA · Mac（Apple Silicon）  
-https://github.com/PaytonHui/BAA/releases/tag/v0.2.0  
+https://github.com/PaytonHui/BAA/releases/tag/v0.2.1  
 
 #NewJeans #Bunnies #桌面寵物
 

@@ -1013,6 +1013,8 @@ pub fn run() {
             schedule_store::load_schedule,
             schedule_store::save_schedule,
             schedule_store::save_schedule_json,
+            schedule_store::load_deleted_ids,
+            schedule_store::remember_deleted_ids,
             schedule_store::load_schedule_reminded,
             schedule_store::save_schedule_reminded,
             weather::fetch_weather_native,

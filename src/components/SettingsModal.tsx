@@ -262,7 +262,7 @@ export function SettingsModal({
         </div>
         <p className="text-[12px] text-[#636366] leading-snug">
           {ai?.available
-            ? "Binky chats with on-device Apple Intelligence. No API key, nothing leaves this Mac."
+            ? "Binky chats with on-device Apple Intelligence. Nothing leaves this Mac."
             : ai?.reason ||
               "Turn on Apple Intelligence in System Settings to chat with Binky."}
         </p>

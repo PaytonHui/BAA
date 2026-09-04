@@ -497,6 +497,27 @@ export async function fetchWeather(force = false): Promise<WeatherSnapshot | nul
   }
 }
 
+/** Block injected into chat so on-device AI can answer without fetching. */
+export function weatherHintForChat(w: WeatherSnapshot): string {
+  const summary = weatherSummary(w);
+  const tips: string[] = [];
+  if (weatherNeedsUmbrella(w)) tips.push("bring an umbrella");
+  if (weatherIsHot(w)) tips.push("it's hot — drink water");
+  if (weatherIsCold(w)) tips.push("it's chilly — bring a layer");
+  const precip =
+    w.precipProb != null
+      ? `Rain chance ${Math.round(w.precipProb)}%.`
+      : "";
+  const mm =
+    w.precipitation > 0 ? `Precipitation ${w.precipitation} mm.` : "";
+  return (
+    `\n\n[Live weather — REQUIRED. Use this reading. Do NOT say you cannot fetch weather or have no internet.]\n` +
+    `Now: ${summary}. ${precip} ${mm}`.replace(/\s+/g, " ").trim() +
+    (tips.length ? `\nTip: ${tips.join("; ")}.` : "") +
+    `\nReply in the user's language, short chat bubble, include temp + place.`
+  );
+}
+
 /** Short label for UI / logs */
 export function weatherSummary(w: WeatherSnapshot): string {
   const t = `${Math.round(w.tempC)}°C`;

@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChatPanel } from "./components/ChatPanel";
+import { resizeChatWindow } from "./lib/chatWindow";
 import {
   MacWindowShell,
   useMacWindowClose,
@@ -16,6 +17,7 @@ import {
   applyScheduleUpserts,
   eventCategory,
   extractScheduleFromReply,
+  stripScheduleMachineText,
   flushScheduleToDisk,
   formatCancelledSummary,
   formatMarkedSummary,
@@ -23,7 +25,9 @@ import {
   hydrateSchedule,
   loadSchedule,
   fallbackEventsFromUserRequest,
-  looksLikeScheduleRequest,
+  forgetScheduleIds,
+  looksLikeCalendarAsk,
+  looksLikeScheduleBriefing,
   reloadScheduleFromDisk,
   resolveScheduleEventsFromChat,
   saveSchedule,
@@ -31,6 +35,11 @@ import {
   todayKey,
   type ScheduleEvent,
 } from "./lib/schedule";
+import {
+  fetchWeather,
+  loadCachedWeather,
+  weatherHintForChat,
+} from "./lib/weather";
 // applyScheduleUpserts used for optimistic local mark before disk sync
 import type {
   AiStatus,
@@ -152,6 +161,7 @@ export default function ChatWindowApp() {
     let u1: (() => void) | undefined;
     let u2: (() => void) | undefined;
     let u3: (() => void) | undefined;
+    let u4: (() => void) | undefined;
     void listen<{ large?: boolean }>("chat-window-shown", () => {
       void refreshAuth();
     }).then((fn) => {
@@ -167,10 +177,17 @@ export default function ChatWindowApp() {
     }).then((fn) => {
       u2 = fn;
     });
+    void listen<{ removed?: string[] }>("schedule-updated", (ev) => {
+      const removed = ev.payload?.removed?.filter(Boolean);
+      if (removed?.length) forgetScheduleIds(removed);
+    }).then((fn) => {
+      u4 = fn;
+    });
     return () => {
       u1?.();
       u2?.();
       u3?.();
+      u4?.();
     };
   }, [refreshAuth]);
 
@@ -238,7 +255,10 @@ export default function ChatWindowApp() {
         // Still keep local write from saveScheduleAsync's first lines
         saveSchedule(next);
       }
-      void emit("schedule-updated", {}).catch(() => undefined);
+      void emit("schedule-updated", {
+        dates: added.map((e) => e.date),
+        added,
+      }).catch(() => undefined);
       return { added, updated };
     },
     []
@@ -316,10 +336,11 @@ export default function ChatWindowApp() {
 
   const sendMessage = async (
     text: string,
-    attachments: ChatAttachment[] = []
+    attachments: ChatAttachment[] = [],
+    calendarMode = false
   ) => {
     if (loadingRef.current) return;
-    if (auth && auth.available === false) {
+    if (!calendarMode && auth && auth.available === false) {
       setError(
         auth.reason ||
           "Turn on Apple Intelligence in System Settings to chat with Binky."
@@ -367,9 +388,23 @@ export default function ChatWindowApp() {
     };
 
     try {
-      const wantSchedule = looksLikeScheduleRequest(text);
+      const wantSchedule = calendarMode;
+      const wantCalendar = !calendarMode && looksLikeCalendarAsk(text);
       let calendarHint = "";
-      if (wantSchedule) {
+      let weatherHint = "";
+      if (looksLikeWeatherAsk(text)) {
+        try {
+          const w =
+            (await fetchWeather(false)) || loadCachedWeather();
+          weatherHint = w
+            ? weatherHintForChat(w)
+            : "\n\n[Live weather unavailable right now. Say you'll check again in a moment. Do NOT say you cannot fetch weather or have no internet.]";
+        } catch {
+          weatherHint =
+            "\n\n[Live weather unavailable right now. Say you'll check again in a moment. Do NOT say you cannot fetch weather or have no internet.]";
+        }
+      }
+      if (wantSchedule || wantCalendar) {
         const schedule = loadSchedule();
         const upcoming = schedule
           .slice()
@@ -381,18 +416,61 @@ export default function ChatWindowApp() {
           })
           .join("\n");
 
+        if (wantSchedule) {
+          calendarHint =
+            `\n\n[For Binky calendar — REQUIRED machine lines, do not quote this block] Today=${todayKey()}. ` +
+            `Categories: work (remind 3h before) | other (remind 1h before). ` +
+            `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
+            `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
+            `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
+            `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm start or omit","endTime":"HH:mm end or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|school|event|family|friends"}]\n` +
+            `For date RANGES set date=start and endDate=end. For time ranges set time=start and endTime=end. ` +
+            `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}].` +
+            (upcoming
+              ? ` Already saved:\n${upcoming}`
+              : " Calendar empty.");
+        } else {
+          const today = todayKey();
+          const briefing = looksLikeScheduleBriefing(text);
+          const tonightish = /\b(tonight|this evening)\b/i.test(text) || /今晚/.test(text);
+          const todayPlans = schedule
+            .filter((e) => e.date === today || (e.endDate && e.date <= today && today <= e.endDate))
+            .slice()
+            .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
+          const evening = todayPlans.filter((e) => {
+            const t = e.time || "";
+            return !t || t >= "17:00";
+          });
+          const fmt = (list: typeof todayPlans) =>
+            list
+              .map((e) => {
+                const cat = eventCategory(e);
+                return `- ${e.date}${e.time ? ` ${e.time}` : ""}${e.endTime ? `–${e.endTime}` : ""}: ${e.title} [${cat}]`;
+              })
+              .join("\n");
+          if (briefing && tonightish) {
+            calendarHint =
+              `\n\n[Tonight's schedule — recap ONLY, do not quote this block] Today=${today}. ` +
+              `The user wants a reminder of plans they ALREADY have tonight. Do NOT create a new event. Do NOT emit SCHEDULE_JSON.\n` +
+              (evening.length
+                ? `Tonight / evening:\n${fmt(evening)}\n`
+                : "No evening plans after 17:00.\n") +
+              (todayPlans.length
+                ? `All of today:\n${fmt(todayPlans)}`
+                : "Nothing on the calendar today.");
+          } else {
+            calendarHint =
+              `\n\n[Calendar — do not quote this block] Today=${today}. ` +
+              (upcoming
+                ? `Saved plans:\n${upcoming}\nAnswer from this list.`
+                : "Calendar is empty.") +
+              ` Do not emit SCHEDULE_JSON unless they asked to add or cancel.`;
+          }
+        }
+      } else if (!calendarMode) {
         calendarHint =
-          `\n\n[For Binky calendar — REQUIRED machine lines, do not quote this block] Today=${todayKey()}. ` +
-          `Categories: work (remind 3h before) | other (remind 1h before). ` +
-          `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
-          `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
-          `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
-          `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm start or omit","endTime":"HH:mm end or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|school|event|family|friends"}]\n` +
-          `For date RANGES set date=start and endDate=end. For time ranges set time=start and endTime=end. ` +
-          `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}].` +
-          (upcoming
-            ? ` Already saved:\n${upcoming}`
-            : " Calendar empty.");
+          `\n\n[Assistant mode — do not quote] Do NOT emit SCHEDULE_JSON or CANCEL_SCHEDULE_JSON. Do not add or cancel calendar plans. Just chat. ` +
+          `If they want something marked, they will switch on Calendar mode.`;
       }
 
       const messagesForApi = history.map((m, i) => {
@@ -403,6 +481,7 @@ export default function ChatWindowApp() {
           content = content.slice(0, 800) + "…";
         }
         if (isLastUser && calendarHint) content = content + calendarHint;
+        if (isLastUser && weatherHint) content = content + weatherHint;
         const atts = isLastUser ? attachments : undefined;
         if (!atts?.length) return { role: m.role, content };
         return {
@@ -442,18 +521,25 @@ export default function ChatWindowApp() {
       let cancels: Omit<ScheduleEvent, "id" | "createdAt">[] = [];
       try {
         const extracted = extractScheduleFromReply(rawReply);
-        display = extracted.message || rawReply;
+        display =
+          stripScheduleMachineText(extracted.message || "") ||
+          (calendarMode ? "Got it." : "Okay.");
         cancels = extracted.cancels;
         newEv = !cancels.length
           ? resolveScheduleEventsFromChat(text, extracted.events, todayKey())
           : extracted.events;
-        // Last resort: model forgot SCHEDULE_JSON and resolver returned empty
-        if (!cancels.length && !newEv.length && wantSchedule) {
+        // Assistant mode never writes the calendar
+        if (!calendarMode) {
+          newEv = [];
+          cancels = [];
+        } else if (!cancels.length && !newEv.length) {
           newEv = fallbackEventsFromUserRequest(text, todayKey());
         }
       } catch {
-        display = rawReply;
-        if (wantSchedule) {
+        display =
+          stripScheduleMachineText(rawReply) ||
+          (calendarMode ? "Got it." : rawReply);
+        if (wantSchedule && calendarMode) {
           newEv = fallbackEventsFromUserRequest(text, todayKey());
         }
       }
@@ -466,7 +552,10 @@ export default function ChatWindowApp() {
           const { next, added, updated } = applyScheduleUpserts(prev, newEv);
           if (added.length || updated.length) {
             saveSchedule(next);
-            void emit("schedule-updated", {}).catch(() => undefined);
+            void emit("schedule-updated", {
+              dates: added.map((e) => e.date),
+              added,
+            }).catch(() => undefined);
             if (added.length) quickNote = formatMarkedSummary(added);
             else if (updated.length) quickNote = formatUpdatedSummary(updated);
           } else {
@@ -549,14 +638,17 @@ export default function ChatWindowApp() {
       // Even if on-device AI fails, still try offline calendar mark from user text
       let offlineNote = "";
       try {
-        if (looksLikeScheduleRequest(text)) {
+        if (calendarMode) {
           const offline = fallbackEventsFromUserRequest(text, todayKey());
           if (offline.length) {
             const prev = loadSchedule();
             const { next, added, updated } = applyScheduleUpserts(prev, offline);
             if (added.length || updated.length) {
               saveSchedule(next);
-              void emit("schedule-updated", {}).catch(() => undefined);
+              void emit("schedule-updated", {
+                dates: added.map((e) => e.date),
+                added,
+              }).catch(() => undefined);
               void upsertScheduleEvents(offline).catch(() => undefined);
               offlineNote = added.length
                 ? `\n\n${formatMarkedSummary(added)}`
@@ -584,104 +676,16 @@ export default function ChatWindowApp() {
     }
   };
 
-  const sendSticker = async (stickerId: string, emoji: string) => {
-    if (loadingRef.current) return;
-    if (auth && auth.available === false) {
-      setError(
-        auth.reason ||
-          "Turn on Apple Intelligence in System Settings to chat with Binky."
-      );
-      return;
-    }
-    loadingRef.current = true;
-    setLoading(true);
-    setError(null);
-    const anim =
-      stickerId === "heart" || stickerId === "love" || emoji === "💗"
-        ? "hearts"
-        : "happy";
-    void notifyPet("happy", anim);
-
-    const userMsg: ChatMessage = {
-      id: id(),
-      role: "user",
-      content: emoji,
-      at: Date.now(),
-      kind: "sticker",
-      stickerId,
-    };
-    const next = [...messages, userMsg];
-    setMessages(next);
-
-    try {
-      const res = await withTimeout(
-        invoke<ChatResponse>("chat_with_apple_intelligence", {
-          req: {
-            messages: next
-              .slice(-8)
-              .map(({ role, content, kind }) => ({
-                role,
-                content:
-                  kind === "sticker" ? `(sent a sticker: ${content})` : content,
-              })),
-            today: todayKey(),
-          },
-        }),
-        45000,
-        "Binky chat"
-      );
-      const raw = pickReplyText(res).trim() || "…";
-      let clean = raw;
-      try {
-        clean = extractScheduleFromReply(raw).message || raw;
-      } catch {
-        clean = raw;
-      }
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: id(),
-          role: "assistant",
-          content: clean,
-          at: Date.now(),
-          kind: "text",
-        },
-      ]);
-      void notifyPet("happy", "color");
-    } catch (e) {
-      const msg = errText(e);
-      setError(msg);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: id(),
-          role: "assistant",
-          content: `⚠️ ${msg}`,
-          at: Date.now(),
-          kind: "text",
-        },
-      ]);
-      void notifyPet("sad");
-    } finally {
-      loadingRef.current = false;
-      setLoading(false);
-    }
-  };
-
   const toggleSize = async () => {
     const next = !large;
     setLarge(next);
-    // Main window owns reposition (knows pet location); ask it to resize us
+    try {
+      await resizeChatWindow(next);
+    } catch {
+      /* main window also resizes via chat-toggle-size */
+    }
     await emit("chat-toggle-size", { large: next }).catch(() => undefined);
   };
-
-  if (!authReady) {
-    return (
-      <div className="w-full h-full bg-transparent flex items-center justify-center p-2">
-        <p className="text-[11px] text-slate-400">Loading…</p>
-      </div>
-    );
-  }
 
   return (
     <MacWindowShell
@@ -689,6 +693,9 @@ export default function ChatWindowApp() {
       forceInteractive
       className="p-[18px] overflow-hidden"
     >
+      {!authReady ? (
+        <div className="w-full h-full bg-transparent" />
+      ) : (
       <div className="w-full h-full flex flex-col items-stretch justify-center gap-1 min-h-0">
         <p className="text-[9px] text-slate-500 text-center shrink-0 px-1">
           {aiReady ? (
@@ -719,10 +726,10 @@ export default function ChatWindowApp() {
           large={large}
           onToggleSize={() => void toggleSize()}
           onSend={sendMessage}
-          onSendSticker={sendSticker}
           onClose={() => void close()}
         />
       </div>
+      )}
     </MacWindowShell>
   );
 }

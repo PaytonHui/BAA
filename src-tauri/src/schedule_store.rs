@@ -124,6 +124,47 @@ fn reminded_path() -> Result<PathBuf, String> {
     Ok(baa_dir()?.join("schedule-reminded.json"))
 }
 
+fn deleted_ids_path() -> Result<PathBuf, String> {
+    Ok(baa_dir()?.join("schedule-deleted.json"))
+}
+
+fn read_deleted_ids() -> Vec<String> {
+    let Ok(path) = deleted_ids_path() else {
+        return Vec::new();
+    };
+    let Ok(raw) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<String>>(&raw)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Ids the user deleted — hydrate/merge must never resurrect them.
+#[tauri::command]
+pub fn load_deleted_ids() -> Result<Vec<String>, String> {
+    Ok(read_deleted_ids())
+}
+
+/// Remember deleted plan ids so other windows cannot write them back.
+#[tauri::command]
+pub fn remember_deleted_ids(ids: Vec<String>) -> Result<Vec<String>, String> {
+    let mut set: std::collections::BTreeSet<String> = read_deleted_ids().into_iter().collect();
+    for id in ids {
+        let t = id.trim();
+        if !t.is_empty() {
+            set.insert(t.to_string());
+        }
+    }
+    let list: Vec<String> = set.into_iter().collect();
+    let path = deleted_ids_path()?;
+    let raw = serde_json::to_string_pretty(&list).map_err(|e| e.to_string())?;
+    fs::write(path, raw).map_err(|e| e.to_string())?;
+    Ok(list)
+}
+
 /// Load schedule from disk. Empty list if missing / invalid.
 #[tauri::command]
 pub fn load_schedule() -> Result<Vec<ScheduleEventDto>, String> {
