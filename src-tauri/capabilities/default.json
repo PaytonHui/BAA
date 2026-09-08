@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Desktop pet window capabilities",
-  "windows": ["main", "chat", "calendar", "color", "settings", "link", "login", "menu"],
+  "windows": ["main", "chat", "calendar", "color", "settings", "link", "login", "menu", "care"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

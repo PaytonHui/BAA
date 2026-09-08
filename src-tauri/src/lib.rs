@@ -72,11 +72,20 @@ fn set_macos_dock_icon() {
 }
 
 fn hide_all_windows(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-    if let Some(chat) = app.get_webview_window("chat") {
-        let _ = chat.hide();
+    for label in [
+        "main",
+        "chat",
+        "calendar",
+        "color",
+        "settings",
+        "link",
+        "login",
+        "menu",
+        "care",
+    ] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.hide();
+        }
     }
 }
 

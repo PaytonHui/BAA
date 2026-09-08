@@ -8,6 +8,7 @@ import SettingsWindowApp from "./SettingsWindowApp";
 import LinkWindowApp from "./LinkWindowApp";
 import GrokLoginWindowApp from "./GrokLoginWindowApp";
 import MenuWindowApp from "./MenuWindowApp";
+import CareWindowApp from "./CareWindowApp";
 import "./index.css";
 
 /**
@@ -27,6 +28,7 @@ function Root() {
   if (panel === "link") return <LinkWindowApp />;
   if (panel === "login") return <GrokLoginWindowApp />;
   if (panel === "menu") return <MenuWindowApp />;
+  if (panel === "care") return <CareWindowApp />;
   return <App />;
 }
 

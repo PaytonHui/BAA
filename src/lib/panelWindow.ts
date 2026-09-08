@@ -23,6 +23,8 @@ import {
   CAL_VIEW_H,
   CAL_VIEW_LARGE_H,
   CAL_W,
+  CARE_PANEL_H,
+  CARE_PANEL_W,
   CHAT_H,
   CHAT_LARGE_H,
   CHAT_LARGE_W,
@@ -38,6 +40,7 @@ import {
   PET_H,
   PET_W,
   SETTINGS_W,
+  type BubbleSide,
 } from "./windowLayout";
 
 /** Grow panel outer size so CSS drop-shadow has room inside the transparent window */
@@ -62,8 +65,7 @@ export async function getEntityLogicalSize(): Promise<{
     const factor = await main.scaleFactor();
     const pos = await main.outerPosition();
     const size = await main.outerSize();
-    // When care strip is open, width is larger; height is still the entity height.
-    // Pet column width ≈ PET_W * scale from height.
+    // Pet window is always the entity size (care is a separate floating window).
     const h = size.height / factor;
     const scale = Math.min(1.85, Math.max(0.65, h / PET_H));
     const petColW = Math.min(size.width / factor, Math.round(PET_W * scale));
@@ -88,7 +90,8 @@ export type PanelKind =
   | "settings"
   | "link"
   | "login"
-  | "menu";
+  | "menu"
+  | "care";
 
 const LABELS: Record<PanelKind, string> = {
   chat: "chat",
@@ -98,6 +101,7 @@ const LABELS: Record<PanelKind, string> = {
   link: "link",
   login: "login",
   menu: "menu",
+  care: "care",
 };
 
 const TITLES: Record<PanelKind, string> = {
@@ -108,7 +112,11 @@ const TITLES: Record<PanelKind, string> = {
   link: "BAA Share calendar",
   login: "BAA · Apple Intelligence",
   menu: "BAA Menu",
+  care: "BAA Care",
 };
+
+/** Extra fields forwarded on `{kind}-window-data` (care bubble copy, etc.) */
+export type PanelWindowExtra = Record<string, unknown>;
 
 /**
  * User-friendly content sizes. Tops are aligned with the entity when placed;
@@ -147,6 +155,8 @@ async function panelSize(
     case "menu":
       // Full function list — every item visible
       return withShadowPad(MENU_PANEL_W, MENU_PANEL_H);
+    case "care":
+      return withShadowPad(CARE_PANEL_W, CARE_PANEL_H);
   }
 }
 
@@ -156,8 +166,10 @@ async function panelSize(
  */
 async function positionNearPet(
   tw: number,
-  th: number
-): Promise<{ x: number; y: number }> {
+  th: number,
+  kind?: PanelKind,
+  preferSide?: BubbleSide
+): Promise<{ x: number; y: number; side: BubbleSide }> {
   // Always anchor to the pet (main) window — never the panel webview itself
   const wins = await getAllWindows();
   const main =
@@ -204,59 +216,78 @@ async function positionNearPet(
   const spaceLeft = stickLeft - mx;
   const spaceRight = mx + mw - stickRight;
 
-  type Cand = { x: number; y: number; score: number };
+  type Cand = { x: number; y: number; score: number; side: BubbleSide };
   const cands: Cand[] = [];
 
-  // Tops of all panels line up with the top of the entity window
+  // Tops of most panels line up with the entity. Care sits mid-stick.
   const topAlignY = winY;
+  const placeY =
+    kind === "care"
+      ? Math.round(winY + winH * 0.28 - PANEL_SHADOW_PAD)
+      : topAlignY;
 
-  // Prefer left/right so tops can match the entity
+  const rightX = stickRight + GAP;
+  const leftX = stickLeft - tw - GAP;
+
+  // Prefer left/right so tops can match the entity (care: away from screen edge)
   if (spaceRight >= tw + GAP - 2) {
-    cands.push({
-      x: stickRight + GAP,
-      y: topAlignY,
-      score: 200 + spaceRight,
-    });
+    let score = 200 + spaceRight;
+    if (preferSide === "right") score += 500;
+    if (preferSide === "left") score -= 80;
+    cands.push({ x: rightX, y: placeY, score, side: "right" });
   }
   if (spaceLeft >= tw + GAP - 2) {
-    cands.push({
-      x: stickLeft - tw - GAP,
-      y: topAlignY,
-      score: 190 + spaceLeft,
-    });
+    let score = 190 + spaceLeft;
+    if (preferSide === "left") score += 500;
+    if (preferSide === "right") score -= 80;
+    cands.push({ x: leftX, y: placeY, score, side: "left" });
   }
-  // Fallbacks (top/bottom) only when sides are blocked
-  if (spaceTop >= th + GAP - 2) {
-    cands.push({
-      x: stickCx - tw / 2,
-      y: winY - th - GAP,
-      score: 50 + spaceTop,
-    });
-  }
-  if (spaceBottom >= th + GAP - 2) {
-    cands.push({
-      x: stickCx - tw / 2,
-      y: winY + winH + GAP,
-      score: 40 + spaceBottom,
-    });
+  // Fallbacks (top/bottom) only when sides are blocked — not for care
+  // (care must stay beside the stick; never resize/move the pet)
+  if (kind !== "care") {
+    if (spaceTop >= th + GAP - 2) {
+      cands.push({
+        x: stickCx - tw / 2,
+        y: winY - th - GAP,
+        score: 50 + spaceTop,
+        side: "right",
+      });
+    }
+    if (spaceBottom >= th + GAP - 2) {
+      cands.push({
+        x: stickCx - tw / 2,
+        y: winY + winH + GAP,
+        score: 40 + spaceBottom,
+        side: "right",
+      });
+    }
   }
 
   let x: number;
   let y: number;
+  let side: BubbleSide;
   if (cands.length) {
     cands.sort((a, b) => b.score - a.score);
     x = cands[0].x;
     y = cands[0].y;
+    side = cands[0].side;
   } else {
-    // Last resort: right of stick, top-aligned with entity
-    x = stickRight + GAP;
-    y = topAlignY;
+    // Last resort: roomier side (or requested side). Clamp the PANEL only —
+    // never shift the pet window.
+    if (preferSide === "left" || (!preferSide && spaceLeft >= spaceRight)) {
+      x = leftX;
+      side = "left";
+    } else {
+      x = rightX;
+      side = "right";
+    }
+    y = placeY;
   }
 
   // Keep on-screen; allow panels almost flush with edges
   x = Math.max(mx + 2, Math.min(x, mx + mw - tw - 2));
   y = Math.max(my + 2, Math.min(y, my + mh - th - 2));
-  return { x: Math.round(x), y: Math.round(y) };
+  return { x: Math.round(x), y: Math.round(y), side };
 }
 
 async function waitFrames(n = 2) {
@@ -267,23 +298,44 @@ async function waitFrames(n = 2) {
 
 export async function showPanelWindow(
   kind: PanelKind,
-  large = false
+  large = false,
+  extra?: PanelWindowExtra
 ): Promise<void> {
   const label = LABELS[kind];
+  const preferSide =
+    extra?.side === "left" || extra?.side === "right"
+      ? extra.side
+      : undefined;
   // Size + place in parallel with looking up the window
   const [sizePos, existing] = await Promise.all([
     (async () => {
       const { w, h } = await panelSize(kind, large);
-      const { x, y } = await positionNearPet(w, h);
-      return { w, h, x, y };
+      const { x, y, side } = await positionNearPet(w, h, kind, preferSide);
+      return { w, h, x, y, side };
     })(),
     WebviewWindow.getByLabel(label),
   ]);
-  const { w, h, x, y } = sizePos;
+  const { w, h, x, y, side } = sizePos;
+  const payload = { large, ...(extra ?? {}), side };
   const shown = `${kind}-window-shown`;
   const prepare = `${kind}-window-prepare`;
+  const stealFocus = kind !== "care";
 
   if (existing) {
+    const vis = await existing.isVisible().catch(() => false);
+    // Care already showing: just move + refresh copy (no hide/show flash)
+    if (kind === "care" && vis) {
+      try {
+        await existing.setSize(new LogicalSize(w, h));
+        await existing.setPosition(new LogicalPosition(x, y));
+      } catch {
+        /* ignore */
+      }
+      void emit(shown, payload);
+      void emit(`${kind}-window-data`, payload);
+      return;
+    }
+
     // Blank the webview *while still visible*, then hide — otherwise macOS
     // keeps the last opaque frame and flashes it on the next show.
     void emit(prepare, {});
@@ -312,10 +364,12 @@ export async function showPanelWindow(
       /* ignore */
     }
 
-    void existing.setFocus().catch(() => undefined);
+    if (stealFocus) {
+      void existing.setFocus().catch(() => undefined);
+    }
     await waitFrames(1);
-    void emit(shown, { large });
-    void emit(`${kind}-window-data`, { large });
+    void emit(shown, payload);
+    void emit(`${kind}-window-data`, payload);
     return;
   }
 
@@ -365,12 +419,14 @@ export async function showPanelWindow(
     /* best-effort show */
   }
 
-  void win.setFocus().catch(() => undefined);
+  if (stealFocus) {
+    void win.setFocus().catch(() => undefined);
+  }
 
   // First create: webview needs a tick to mount the shown listener
   await new Promise<void>((r) => window.setTimeout(r, 32));
-  void emit(shown, { large });
-  void emit(`${kind}-window-data`, { large });
+  void emit(shown, payload);
+  void emit(`${kind}-window-data`, payload);
 }
 
 export async function hidePanelWindow(kind: PanelKind): Promise<void> {
@@ -402,7 +458,7 @@ export async function repositionPanelWindow(
   const visible = await win.isVisible().catch(() => false);
   if (!visible) return;
   const { w, h } = await panelSize(kind, large);
-  const { x, y } = await positionNearPet(w, h);
+  const { x, y } = await positionNearPet(w, h, kind);
   await win.setSize(new LogicalSize(w, h));
   await win.setPosition(new LogicalPosition(x, y));
 }
@@ -445,7 +501,7 @@ export async function resizePanelWindow(
   const win = await WebviewWindow.getByLabel(LABELS[kind]);
   if (!win) return;
   const { w, h } = await panelSize(kind, large);
-  const { x, y } = await positionNearPet(w, h);
+  const { x, y } = await positionNearPet(w, h, kind);
   await win.setSize(new LogicalSize(w, h));
   await win.setPosition(new LogicalPosition(x, y));
   await emit(`${kind}-window-size`, { large });
@@ -504,7 +560,7 @@ export async function resizeCalendarForComposer(
     setPosition: (p: LogicalPosition) => Promise<void>;
     setIgnoreCursorEvents?: (v: boolean) => Promise<void>;
   }) => {
-    const { x, y } = await positionNearPet(w, h);
+    const { x, y } = await positionNearPet(w, h, "calendar");
     await win.setSize(new LogicalSize(w, h));
     await win.setPosition(new LogicalPosition(x, y));
     // Force macOS transparent redraw (avoids white bar under the card)
