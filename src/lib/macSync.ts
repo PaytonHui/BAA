@@ -19,6 +19,7 @@ export async function publishScheduleToCompanion(
           note: e.note ? String(e.note) : null,
           category: e.category ?? "event",
           createdAt: Number(e.createdAt) || Date.now(),
+          repeat: e.repeat ?? null,
         })),
       }
     );

@@ -39,6 +39,7 @@ export function LinkPhonePanel({ open, onClose }: LinkPhonePanelProps) {
       note: e.note ?? null,
       category: e.category ?? null,
       endDate: e.endDate ?? null,
+      repeat: e.repeat ?? null,
     }));
 
   const runSync = async () => {

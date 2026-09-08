@@ -15,6 +15,8 @@ export function usePetClickThrough(opts: {
   petScale: number;
   careStripOpen: boolean;
   carePanelW: number;
+  /** Care strip side — default right of the stick */
+  careSide?: "left" | "right";
   dragging: boolean;
   /** Keep window fully interactive (e.g. temporary UI on main) */
   forceInteractive?: boolean;
@@ -61,7 +63,10 @@ export function usePetClickThrough(opts: {
           // Match Lightstick3D pet-hit (tight stick silhouette)
           const hitW = 42 * s;
           const hitH = 150 * s;
-          const hitLeft = (o.petW - hitW) / 2;
+          const careOnLeft = o.careStripOpen && o.careSide === "left";
+          const overlap = 52;
+          const petLeft = careOnLeft ? Math.max(0, o.carePanelW - overlap) : 0;
+          const hitLeft = petLeft + (o.petW - hitW) / 2;
           const hitTop = (o.petH - hitH) / 2;
 
           let over =
@@ -70,16 +75,16 @@ export function usePetClickThrough(opts: {
             ly >= hitTop &&
             ly <= hitTop + hitH;
 
-          // Care bubble strip sits to the right of the pet column
-          if (
-            !over &&
-            o.careStripOpen &&
-            lx >= o.petW - 6 &&
-            lx <= o.petW + o.carePanelW + 4 &&
-            ly >= 0 &&
-            ly <= o.petH
-          ) {
-            over = true;
+          // Care bubble strip sits beside the pet column
+          if (!over && o.careStripOpen && ly >= 0 && ly <= o.petH) {
+            if (careOnLeft) {
+              if (lx >= 0 && lx <= o.carePanelW + 4) over = true;
+            } else if (
+              lx >= o.petW - 6 &&
+              lx <= o.petW + o.carePanelW + 4
+            ) {
+              over = true;
+            }
           }
 
           await setIgnore(!over);

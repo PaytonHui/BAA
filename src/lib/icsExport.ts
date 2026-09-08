@@ -78,6 +78,10 @@ export function scheduleToIcs(events: ScheduleEvent[]): string {
       lines.push(`DTEND;VALUE=DATE:${nextDayYyyymmdd(date)}`);
     }
 
+    if (e.repeat === "yearly") {
+      lines.push("RRULE:FREQ=YEARLY");
+    }
+
     lines.push("END:VEVENT");
   }
 

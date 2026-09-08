@@ -20,7 +20,18 @@ use tauri::{
 /// Cancels an in-flight “float home” animation when a new one starts.
 static FLOAT_HOME_GEN: AtomicU64 = AtomicU64::new(0);
 
-/// Force the macOS Dock / app switcher icon (bundle Resources alone is not enough
+/// Default pet window (logical px) — keep in sync with `PET_W` / `PET_H` in windowLayout.ts
+const PET_W: f64 = 220.0;
+const PET_H: f64 = 324.0;
+
+/// Ask the pet window to show a care bubble now.
+#[tauri::command]
+fn show_care_bubble(app: tauri::AppHandle) -> Result<(), String> {
+    let _ = app.emit("show-care-bubble", ());
+    Ok(())
+}
+
+/// Force the macOS Dock / app switcher icon (bundle Resources alone is not enough)
 /// for a hand-built .app — NSApp keeps the icon Tauri embeds at build time).
 #[cfg(target_os = "macos")]
 fn set_macos_dock_icon() {
@@ -135,7 +146,7 @@ fn lerp_f64(a: f64, b: f64, t: f64) -> f64 {
 
 /// Float main window to default pet size at screen center (~0.55s ease-out).
 fn float_pet_to_center(app: tauri::AppHandle) -> Result<(), String> {
-    float_window_to_center_sized(app, 190.0, 280.0)
+    float_window_to_center_sized(app, PET_W, PET_H)
 }
 
 /// Smoothly resize + move main window to monitor center at a given logical size.
@@ -314,7 +325,7 @@ fn set_pet_layout(app: tauri::AppHandle, chat_open: bool) -> Result<(), String> 
         (360.0, 760.0)
     } else {
         // Tall enough to show entire lightstick (head + handle)
-        (190.0, 280.0)
+        (PET_W, PET_H)
     };
     window
         .set_size(LogicalSize::new(w, h))
@@ -440,8 +451,8 @@ fn resize_panel_dock(
     let new_h = (height * factor).round() as i32;
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
-    let pet_w = (190.0 * factor).round() as i32;
-    let pet_h = (280.0 * factor).round() as i32;
+    let pet_w = (PET_W * factor).round() as i32;
+    let pet_h = (PET_H * factor).round() as i32;
     let sw = size.width as i32;
     let sh = size.height as i32;
     let compact = sw <= pet_w + 8 && sh <= pet_h + 8;
@@ -520,7 +531,7 @@ fn resize_menu_side(
     let want_side = side.as_deref().filter(|s| *s == "left" || *s == "right");
     // PET_W 190 + MENU_PANEL 168 = 358 by default; height follows pet zoom
     let total_w = width.filter(|w| *w >= 120.0 && *w <= 900.0).unwrap_or(358.0);
-    let total_h = height.filter(|h| *h >= 180.0 && *h <= 600.0).unwrap_or(280.0);
+    let total_h = height.filter(|h| *h >= 180.0 && *h <= 600.0).unwrap_or(PET_H);
 
     #[cfg(target_os = "macos")]
     {
@@ -583,8 +594,8 @@ fn collapse_menu_side(
         .get_webview_window("main")
         .ok_or_else(|| "main window missing".to_string())?;
 
-    let pet_w = width.filter(|w| *w >= 100.0 && *w <= 500.0).unwrap_or(190.0);
-    let pet_h = height.filter(|h| *h >= 140.0 && *h <= 600.0).unwrap_or(280.0);
+    let pet_w = width.filter(|w| *w >= 100.0 && *w <= 500.0).unwrap_or(PET_W);
+    let pet_h = height.filter(|h| *h >= 140.0 && *h <= 600.0).unwrap_or(PET_H);
 
     #[cfg(target_os = "macos")]
     {
@@ -806,8 +817,8 @@ unsafe fn ns_set_frame_panel_dock(
     height_pts: f64,
 ) -> Result<(), String> {
     let cur = ns_get_frame(ns_window)?;
-    let pet_w = 190.0_f64;
-    let pet_h = 280.0_f64;
+    let pet_w = PET_W;
+    let pet_h = PET_H;
     let cw = cur.size.width;
     let ch = cur.size.height;
     let compact = cw <= pet_w + 8.0 && ch <= pet_h + 8.0;
@@ -957,6 +968,32 @@ unsafe fn ns_set_frame_menu_side(
         }
     };
     ns_set_frame(ns_window, frame)?;
+    // AppKit constrainFrameRect can slide a near-edge window to keep it
+    // on-screen — that drags the stick. Re-pin the pet's edge.
+    if let Ok(after) = ns_get_frame(ns_window) {
+        let mut fix = after;
+        let mut need_fix = false;
+        if grow_right {
+            if (after.origin.x - cur.origin.x).abs() > 0.5 {
+                fix.origin.x = cur.origin.x;
+                need_fix = true;
+            }
+        } else {
+            let want_right = cur.origin.x + cur.size.width;
+            let got_right = after.origin.x + after.size.width;
+            if (got_right - want_right).abs() > 0.5 {
+                fix.origin.x = want_right - after.size.width;
+                need_fix = true;
+            }
+        }
+        if (after.origin.y - cur.origin.y).abs() > 0.5 {
+            fix.origin.y = cur.origin.y;
+            need_fix = true;
+        }
+        if need_fix {
+            let _ = ns_set_frame(ns_window, fix);
+        }
+    }
     Ok(if grow_right { "right" } else { "left" }.to_string())
 }
 
@@ -986,7 +1023,31 @@ unsafe fn ns_collapse_menu_side(
             height: height_pts,
         },
     };
-    ns_set_frame(ns_window, frame)
+    ns_set_frame(ns_window, frame)?;
+    // Keep the pet edge pinned if AppKit constrained the collapse frame
+    if let Ok(after) = ns_get_frame(ns_window) {
+        let mut fix = after;
+        let mut need_fix = false;
+        if menu_side == "left" {
+            let want_right = cur.origin.x + cur.size.width;
+            let got_right = after.origin.x + after.size.width;
+            if (got_right - want_right).abs() > 0.5 {
+                fix.origin.x = want_right - after.size.width;
+                need_fix = true;
+            }
+        } else if (after.origin.x - cur.origin.x).abs() > 0.5 {
+            fix.origin.x = cur.origin.x;
+            need_fix = true;
+        }
+        if (after.origin.y - cur.origin.y).abs() > 0.5 {
+            fix.origin.y = cur.origin.y;
+            need_fix = true;
+        }
+        if need_fix {
+            let _ = ns_set_frame(ns_window, fix);
+        }
+    }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -996,6 +1057,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             hide_window,
             show_window,
+            show_care_bubble,
             pause_pet,
             resume_pet,
             center_pet_on_screen,
@@ -1061,7 +1123,7 @@ pub fn run() {
             let menu = Menu::with_items(
                 app,
                 &[
-                    &resume_i, &pause_i, &sep, &chat_i, &cal_i, &color_i, &sep, &quit_i,
+                    &resume_i, &pause_i, &sep, &cal_i, &chat_i, &color_i, &sep, &quit_i,
                 ],
             )?;
 
@@ -1117,8 +1179,8 @@ pub fn run() {
                     let size = monitor.size();
                     let origin = monitor.position();
                     let scale = monitor.scale_factor();
-                    let win_w = (190.0 * scale) as i32;
-                    let win_h = (280.0 * scale) as i32;
+                    let win_w = (PET_W * scale) as i32;
+                    let win_h = (PET_H * scale) as i32;
                     let margin_x = (24.0 * scale) as i32;
                     let margin_y = (56.0 * scale) as i32; // leave room above Dock
                     let x = origin.x + size.width as i32 - win_w - margin_x;

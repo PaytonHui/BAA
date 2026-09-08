@@ -15,14 +15,17 @@ import {
   eventCategory,
   eventsOnDate,
   expandMultiDayDates,
-  formatTimeRange,
+  formatEventDuration,
+  formatTimeRangeWithDuration,
   hhmmToMinutes,
+  isYearlyEvent,
   monthLabel,
   toDateKey,
   todayKey,
   type MultiDayMode,
   type ScheduleCategory,
   type ScheduleEvent,
+  type ScheduleRepeat,
 } from "../lib/schedule";
 
 export type ManualScheduleInput = {
@@ -33,11 +36,15 @@ export type ManualScheduleInput = {
    * all dates including `date`. One day → omit or single-item.
    */
   dates?: string[];
+  /** Inclusive end date for a yearly multi-day span */
+  endDate?: string;
   title: string;
   time?: string;
   endTime?: string;
   note?: string;
   category: ScheduleCategory;
+  /** yearly = same month-day every year */
+  repeat?: ScheduleRepeat;
 };
 
 interface CalendarPanelProps {
@@ -107,6 +114,7 @@ export function CalendarPanel({
   /** Which wheel is active in the composer */
   const [timeTab, setTimeTab] = useState<"start" | "end">("start");
   const [category, setCategory] = useState<ScheduleCategory>("event");
+  const [yearly, setYearly] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   /** When set, form is editing this event id */
@@ -274,6 +282,7 @@ export function CalendarPanel({
     }
     setTimeTab("start");
     setCategory("event");
+    setYearly(false);
     setFormError(null);
     setEditingId(null);
     setMultiMode("once");
@@ -287,6 +296,7 @@ export function CalendarPanel({
     setEndTime(addMinutesToHhmm(start, 60));
     setTimeTab("start");
     setCategory("event");
+    setYearly(false);
     setEditingId(null);
     setMultiMode("once");
     setMultiEnd(selected);
@@ -296,7 +306,10 @@ export function CalendarPanel({
   };
 
   const openEdit = (ev: ScheduleEvent) => {
-    setSelected(ev.date);
+    // Yearly series: keep the day you tapped (same month-day, any year)
+    if (!isYearlyEvent(ev)) {
+      setSelected(ev.date);
+    }
     setTitle(ev.title);
     const start = ev.time?.trim() || "";
     setTime(start);
@@ -306,19 +319,22 @@ export function CalendarPanel({
     );
     setTimeTab("start");
     setCategory(eventCategory(ev));
+    setYearly(isYearlyEvent(ev));
     setEditingId(ev.id);
     setMultiMode("once");
     setMultiEnd(ev.date);
     setAddOpen(true);
     setFormError(null);
     setCtxMenu(null);
-    // Jump month to the event if needed
-    try {
-      const [y, m] = ev.date.split("-").map(Number);
-      setYear(y);
-      setMonth(m - 1);
-    } catch {
-      /* ignore */
+    // Jump month to the event if needed (yearly: stay on the year you were viewing)
+    if (!isYearlyEvent(ev)) {
+      try {
+        const [y, m] = ev.date.split("-").map(Number);
+        setYear(y);
+        setMonth(m - 1);
+      } catch {
+        /* ignore */
+      }
     }
   };
 
@@ -343,9 +359,14 @@ export function CalendarPanel({
         return;
       }
     }
-    // Multi-day only for new plans (not edit) — range from Shift+click on grid
+    // Multi-day copies only for new one-off plans — yearly is one series
     let dates: string[] | undefined;
-    if (!editingId && multiMode !== "once" && multiDates.length > 1) {
+    let endDate: string | undefined;
+    if (yearly) {
+      if (!editingId && multiMode !== "once" && multiDates.length > 1) {
+        endDate = rangeEnd;
+      }
+    } else if (!editingId && multiMode !== "once" && multiDates.length > 1) {
       dates = multiDates;
       if (!dates.length) {
         setFormError("No days in that range (check weekdays filter)");
@@ -360,10 +381,12 @@ export function CalendarPanel({
     const payload: ManualScheduleInput = {
       date: selected,
       dates,
+      endDate,
       title: t,
       time: start,
       endTime: end,
       category,
+      repeat: yearly ? "yearly" : undefined,
     };
     try {
       if (editingId && onUpdate) {
@@ -687,6 +710,12 @@ export function CalendarPanel({
             const cat = eventCategory(ev);
             const meta = CATEGORY_META[cat];
             const locked = isDefaultCalendarId(ev.id);
+            const timeLabel = formatTimeRangeWithDuration(ev.time, ev.endTime);
+            const yearly = isYearlyEvent(ev);
+            const daySpan =
+              ev.endDate && ev.endDate !== ev.date
+                ? formatEventDuration(undefined, undefined, ev.date, ev.endDate)
+                : "";
             return (
               <div key={ev.id} className="flex items-start gap-1.5 pr-1">
                 <div className="w-8 shrink-0 pt-0.5">
@@ -738,14 +767,20 @@ export function CalendarPanel({
                       }`}
                     >
                       <div className="flex items-center gap-1 flex-wrap">
-                        {formatTimeRange(ev.time, ev.endTime) && (
+                        {timeLabel && (
                           <span className="font-bold text-neutral-700">
-                            {formatTimeRange(ev.time, ev.endTime)}
+                            {timeLabel}
+                          </span>
+                        )}
+                        {yearly && (
+                          <span className="text-[9px] font-semibold text-violet-700 bg-violet-100/80 border border-violet-200 rounded-full px-1.5 py-0.5">
+                            Every year
                           </span>
                         )}
                         {ev.endDate && ev.endDate !== ev.date && (
                           <span className="text-[9px] font-semibold text-neutral-600">
                             {ev.date.slice(5)} → {ev.endDate.slice(5)}
+                            {daySpan ? ` · ${daySpan}` : ""}
                           </span>
                         )}
                         <span
@@ -1016,11 +1051,39 @@ export function CalendarPanel({
                   emptyDisplay="Open end"
                 />
               )}
-              {time && endTime && (
+              {(time && endTime) ||
+              yearly ||
+              (multiMode !== "once" && multiDates.length > 1) ? (
                 <p className="text-center text-[11px] font-semibold text-neutral-600 tabular-nums">
-                  {formatTimeRange(time, endTime)}
+                  {[
+                    time && endTime
+                      ? formatTimeRangeWithDuration(time, endTime)
+                      : "",
+                    yearly ? "every year" : "",
+                    !yearly &&
+                    !editingId &&
+                    multiMode !== "once" &&
+                    multiDates.length > 1
+                      ? `${multiDates.length} days`
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </p>
-              )}
+              ) : null}
+
+              <button
+                type="button"
+                onClick={() => setYearly((v) => !v)}
+                aria-pressed={yearly}
+                className={`w-full h-8 rounded-full text-[11px] font-semibold border transition ${
+                  yearly
+                    ? "bg-violet-600/15 text-violet-800 border-violet-300"
+                    : "bg-[#F7F7F8] text-neutral-600 border-neutral-200"
+                }`}
+              >
+                {yearly ? "Every year · on" : "Every year"}
+              </button>
 
               <div className="grid grid-cols-5 gap-1">
                 {SCHEDULE_CATEGORIES.map((c) => {

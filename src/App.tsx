@@ -58,6 +58,7 @@ import {
   expandForCare,
   collapseSideToPet,
   petSizeAt,
+  pickBubbleSide,
   resizePetScale,
   type BubbleSide,
   type PanelDock,
@@ -269,9 +270,16 @@ export default function App() {
   } | null>(null);
   const careLastTextRef = useRef("");
   const careFirstRef = useRef(true);
-  /** Care bubble always on the right of the pet; window grows right while open */
+  /** Care strip open; side is chosen like panels (into free space) */
   const careOpenRef = useRef(false);
+  const careSideRef = useRef<BubbleSide>("right");
+  /**
+   * Layout pin for the care strip — set BEFORE native resize so the stick
+   * does not jump, and cleared AFTER collapse so it does not jump back.
+   */
+  const [careStripSide, setCareStripSide] = useState<BubbleSide | null>(null);
   const careRescheduleRef = useRef<() => void>(() => undefined);
+  const showCareNowRef = useRef<() => void>(() => undefined);
   /** Force a weather care bubble (Mac wake / chat weather ask) */
   const forceWeatherCareRef = useRef<
     (w: WeatherSnapshot) => void | Promise<void>
@@ -758,13 +766,36 @@ export default function App() {
   }, [fireAnim]);
 
   const collapseCareLayout = useCallback(async () => {
-    if (!careOpenRef.current) return;
+    if (!careOpenRef.current) {
+      setCareStripSide(null);
+      return;
+    }
+    const side = careSideRef.current;
     careOpenRef.current = false;
     try {
-      await collapseSideToPet("right", petScaleRef.current);
+      // Native collapse first while CSS is still pinned — then drop the pin
+      await collapseSideToPet(side, petScaleRef.current);
     } catch {
       await collapseToPet(panelDockRef.current, petScaleRef.current);
     }
+    setCareStripSide(null);
+  }, []);
+
+  /** Expand the care strip into free space (left or right of the stick). */
+  const ensureCareStrip = useCallback(async (): Promise<BubbleSide> => {
+    if (careOpenRef.current) return careSideRef.current;
+    const side = await pickBubbleSide();
+    careSideRef.current = side;
+    // Pin CSS before the OS window grows, otherwise the stick slides then snaps back
+    setCareStripSide(side);
+    await new Promise<void>((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => r()))
+    );
+    const applied = await expandForCare(side, petScaleRef.current);
+    careSideRef.current = applied;
+    if (applied !== side) setCareStripSide(applied);
+    careOpenRef.current = true;
+    return careSideRef.current;
   }, []);
 
   /**
@@ -772,17 +803,21 @@ export default function App() {
    * Avoids a clipped bubble while the window resizes.
    */
   const clearCareBubbleNow = useCallback(async () => {
-    setCareBubble(null);
-    if (!careOpenRef.current) return;
+    const side = careSideRef.current;
+    const wasOpen = careOpenRef.current;
     careOpenRef.current = false;
-    try {
-      await collapseSideToPet("right", petScaleRef.current);
-    } catch {
-      const { w, h } = petSizeAt(petScaleRef.current);
-      await invoke("resize_bottom_center", { width: w, height: h }).catch(
-        () => undefined
-      );
+    if (wasOpen) {
+      try {
+        await collapseSideToPet(side, petScaleRef.current);
+      } catch {
+        const { w, h } = petSizeAt(petScaleRef.current);
+        await invoke("resize_bottom_center", { width: w, height: h }).catch(
+          () => undefined
+        );
+      }
     }
+    setCareStripSide(null);
+    setCareBubble(null);
   }, []);
 
   /**
@@ -792,7 +827,7 @@ export default function App() {
   const sizeMainForPet = useCallback(async () => {
     const scale = petScaleRef.current;
     if (careOpenRef.current || careBubbleRef.current?.visible) {
-      await expandForCare("right", scale);
+      await expandForCare(careSideRef.current, scale);
       return;
     }
     const { w, h } = petSizeAt(scale);
@@ -809,8 +844,10 @@ export default function App() {
   const dismissCareBubble = useCallback(() => {
     setCareBubble((prev) => (prev ? { ...prev, visible: false } : null));
     window.setTimeout(() => {
-      setCareBubble(null);
-      void collapseCareLayout().then(() => careRescheduleRef.current());
+      void collapseCareLayout().then(() => {
+        setCareBubble(null);
+        careRescheduleRef.current();
+      });
     }, 220);
   }, [collapseCareLayout]);
 
@@ -869,8 +906,7 @@ export default function App() {
           !loginOpenRef.current
         ) {
           try {
-            await expandForCare("right", petScaleRef.current);
-            careOpenRef.current = true;
+            await ensureCareStrip();
             // Let the compositor settle one frame before mounting weather overlays
             await new Promise<void>((r) =>
               requestAnimationFrame(() => requestAnimationFrame(() => r()))
@@ -912,7 +948,7 @@ export default function App() {
         console.error("[weather-fx] moment failed", e);
       }
     },
-    [ensureBirthdayThen]
+    [ensureBirthdayThen, ensureCareStrip]
   );
 
   // MacBook lid open / sleep wake / display wake → weather anime every time
@@ -994,8 +1030,7 @@ export default function App() {
       try {
         // Single expand only — double expand on wake caused visible jitter
         if (!careOpenRef.current) {
-          await expandForCare("right", petScaleRef.current);
-          careOpenRef.current = true;
+          await ensureCareStrip();
           await new Promise<void>((r) =>
             requestAnimationFrame(() => requestAnimationFrame(() => r()))
           );
@@ -1025,7 +1060,7 @@ export default function App() {
         text: line.text,
         kind: line.kind,
         emoji: line.emoji,
-        side: "right",
+        side: careSideRef.current,
         visible: true,
       });
       // Track physio interval so water / eyes / move fire on schedule
@@ -1093,8 +1128,8 @@ export default function App() {
         setCareBubble((prev) => (prev ? { ...prev, visible: false } : null));
         showTimer = window.setTimeout(() => {
           if (cancelled) return;
-          setCareBubble(null);
           void collapseCareLayout().then(() => {
+            setCareBubble(null);
             if (!cancelled) scheduleNext();
           });
         }, 220);
@@ -1121,7 +1156,7 @@ export default function App() {
       const due = getDueReminders(loadSchedule());
       if (due.length) {
         const r = due[0];
-        markReminded(r.event.id);
+        markReminded(r.reminderId ?? r.event.id);
         const ok = await showBubble(
           {
             text: r.message,
@@ -1231,7 +1266,7 @@ export default function App() {
       // Mac busy: still push to phone so you don't miss work/schedule
       if (busyForCareRef.current || document.hidden || careBubbleRef.current) {
         for (const r of due) {
-          markReminded(r.event.id);
+          markReminded(r.reminderId ?? r.event.id);
           void pushPhoneReminder({
             text: r.message,
             emoji: r.emoji,
@@ -1250,6 +1285,21 @@ export default function App() {
     };
 
     careRescheduleRef.current = () => scheduleNext(false);
+    showCareNowRef.current = () => {
+      const titles = loadSchedule()
+        .filter((e) => e.date === todayKey())
+        .map((e) => e.title);
+      const line =
+        pickCareLine({
+          scheduleTitles: titles,
+          weather: weatherRef.current,
+        }) ?? {
+          text: "Water break! A small sip keeps you glowing.",
+          kind: "hydrate" as CareKind,
+          emoji: "💧",
+        };
+      void showBubble(line, "notice", { forceWeather: true });
+    };
 
     forceWeatherCareRef.current = async (w: WeatherSnapshot) => {
       if (cancelled || appPausedRef.current) return;
@@ -1274,6 +1324,7 @@ export default function App() {
     return () => {
       cancelled = true;
       careRescheduleRef.current = () => undefined;
+      showCareNowRef.current = () => undefined;
       forceWeatherCareRef.current = () => undefined;
       window.clearTimeout(waitTimer);
       window.clearTimeout(showTimer);
@@ -1281,10 +1332,20 @@ export default function App() {
       if (remindPoll) window.clearInterval(remindPoll);
       if (careOpenRef.current) {
         careOpenRef.current = false;
-        void collapseSideToPet("right", petScaleRef.current).catch(() => undefined);
+        void collapseSideToPet(careSideRef.current, petScaleRef.current).catch(() => undefined);
       }
     };
-  }, [fireAnim, collapseCareLayout]);
+  }, [fireAnim, collapseCareLayout, ensureCareStrip]);
+
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    void listen("show-care-bubble", () => {
+      showCareNowRef.current();
+    }).then((fn) => {
+      un = fn;
+    });
+    return () => un?.();
+  }, []);
 
   // Shared weather fetch for care tips (FX runs only when weather care bubble shows)
   useEffect(() => {
@@ -1410,7 +1471,7 @@ export default function App() {
 
       // Re-assert care layout after chat window appears
       if (careOpenRef.current || careBubbleRef.current?.visible) {
-        await expandForCare("right", petScaleRef.current);
+        await expandForCare(careSideRef.current, petScaleRef.current);
       }
     } catch (e) {
       console.error(e);
@@ -1736,6 +1797,7 @@ export default function App() {
         note: e.note ?? null,
         category: e.category ?? null,
         endDate: e.endDate ?? null,
+        repeat: e.repeat ?? null,
       }));
 
   /**
@@ -1750,8 +1812,7 @@ export default function App() {
     void (async () => {
       try {
         if (!careOpenRef.current) {
-          await expandForCare("right", petScaleRef.current);
-          careOpenRef.current = true;
+          await ensureCareStrip();
         }
       } catch {
         /* still try to show bubble */
@@ -1760,7 +1821,7 @@ export default function App() {
         text: short,
         kind: "schedule",
         emoji: ok ? "📅" : "⚠️",
-        side: "right",
+        side: careSideRef.current,
         visible: true,
       });
       if (ok) playNotice();
@@ -1771,13 +1832,14 @@ export default function App() {
         prev && prev.text === short ? { ...prev, visible: false } : prev
       );
       window.setTimeout(() => {
-        setCareBubble((prev) =>
-          prev && prev.text === short ? null : prev
-        );
-        void collapseCareLayout();
+        void collapseCareLayout().then(() => {
+          setCareBubble((prev) =>
+            prev && prev.text === short ? null : prev
+          );
+        });
       }, 280);
     }, ok ? 5200 : 6400);
-  }, [collapseCareLayout]);
+  }, [collapseCareLayout, ensureCareStrip]);
 
   // Status from Sync (menu → main)
   useEffect(() => {
@@ -2075,7 +2137,7 @@ export default function App() {
       };
 
       if (careOpenRef.current || careBubbleRef.current?.visible) {
-        void expandForCare("right", next).then(afterResize);
+        void expandForCare(careSideRef.current, next).then(afterResize);
         return;
       }
 
@@ -2279,7 +2341,7 @@ export default function App() {
       return;
     }
     // Tap body: dismiss open panel / menu, else toggle primary panel.
-    // Left-click opens chat (Apple Intelligence). Calendar stays in the menu.
+    // Left-click opens calendar (preset). Chat is second — from the menu.
     // Do NOT open a panel while closing another.
     if (e.button === 0) {
       if (loginOpenRef.current) {
@@ -2369,7 +2431,7 @@ export default function App() {
         await closeChat();
         return;
       }
-      await openChatRef.current?.();
+      await openCalendarRef.current?.();
     }
   };
 
@@ -2412,11 +2474,13 @@ export default function App() {
   weatherFxForcedRef.current = weatherFxForced;
 
   /**
-   * Pet strip — always left-pinned so expanding the care strip never
-   * re-centers the stick (center→left was a big source of wake jitter).
+   * Pet strip — pin to the stick's edge so expanding the care strip
+   * never re-centers the stick (center→left was a big source of wake jitter).
    */
   // Keep strip while bubble exists (including exit fade) so text never clips
-  const careStripOpen = !!careBubble && shell === "compact";
+  const careStripOpen = careStripSide != null && shell === "compact";
+  const careSide = careStripSide ?? careBubble?.side ?? careSideRef.current;
+  const careOnLeft = careStripOpen && careSide === "left";
 
   // Transparent glass around the stick must not block other apps/windows
   usePetClickThrough({
@@ -2425,10 +2489,12 @@ export default function App() {
     petScale,
     careStripOpen,
     carePanelW: CARE_PANEL_W,
+    careSide,
     dragging: dragMotion.dragging || freeLook.active,
   });
-  const petBarClass =
-    "absolute z-20 bottom-0 left-0 flex items-end justify-start";
+  const petBarClass = careOnLeft
+    ? "absolute z-20 bottom-0 right-0 flex items-end justify-end"
+    : "absolute z-20 bottom-0 left-0 flex items-end justify-start";
 
   const petBarStyle: CSSProperties = careStripOpen
     ? { width: petW + CARE_PANEL_W, height: petH }
@@ -2439,7 +2505,9 @@ export default function App() {
       {/* —— PET + optional care strip (zoomable; no % translate) —— */}
       <div className={petBarClass} style={petBarStyle}>
         <div
-          className="relative shrink-0 flex flex-row items-end justify-start"
+          className={`relative shrink-0 flex items-end ${
+            careOnLeft ? "flex-row-reverse justify-end" : "flex-row justify-start"
+          }`}
           style={{
             width: careStripOpen ? petW + CARE_PANEL_W : petW,
             height: petH,
@@ -2512,26 +2580,33 @@ export default function App() {
           </div>
 
           {/* Care strip — tucked into pet edge so weather/care bubbles sit close */}
-          {careStripOpen && careBubble && (
+          {careStripOpen && (
             <div
-              className="relative shrink-0 flex items-center justify-start"
+              className={`relative shrink-0 flex items-center ${
+                careOnLeft ? "justify-end" : "justify-start"
+              }`}
               style={{
                 width: CARE_PANEL_W,
                 height: petH,
                 // Overlap pet column so bubble sits tight to the stick
-                marginLeft: -52,
-                paddingLeft: 2,
+                marginLeft: careOnLeft ? 0 : -52,
+                marginRight: careOnLeft ? -52 : 0,
+                paddingLeft: careOnLeft ? 8 : 2,
+                paddingRight: careOnLeft ? 2 : 0,
                 paddingBottom: Math.round(petH * 0.22),
               }}
             >
-              <CareBubble
-                layout="strip"
-                text={careBubble.text}
-                kind={careBubble.kind}
-                emoji={careBubble.emoji}
-                visible={careBubble.visible}
-                onDismiss={dismissCareBubble}
-              />
+              {careBubble && (
+                <CareBubble
+                  layout="strip"
+                  side={careSide}
+                  text={careBubble.text}
+                  kind={careBubble.kind}
+                  emoji={careBubble.emoji}
+                  visible={careBubble.visible}
+                  onDismiss={dismissCareBubble}
+                />
+              )}
             </div>
           )}
         </div>

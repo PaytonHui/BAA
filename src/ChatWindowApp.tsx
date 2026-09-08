@@ -16,11 +16,13 @@ import {
   applyScheduleCancels,
   applyScheduleUpserts,
   eventCategory,
+  eventTouchesDate,
   extractScheduleFromReply,
   stripScheduleMachineText,
   flushScheduleToDisk,
   formatCancelledSummary,
   formatMarkedSummary,
+  formatTimeRangeWithDuration,
   formatUpdatedSummary,
   hydrateSchedule,
   loadSchedule,
@@ -412,7 +414,8 @@ export default function ChatWindowApp() {
           .slice(0, 12)
           .map((e) => {
             const cat = eventCategory(e);
-            return `- ${e.date}${e.time ? ` ${e.time}` : ""}: ${e.title} [${cat}]`;
+            const when = formatTimeRangeWithDuration(e.time, e.endTime);
+            return `- ${e.date}${when ? ` ${when}` : ""}: ${e.title} [${cat}]`;
           })
           .join("\n");
 
@@ -423,8 +426,9 @@ export default function ChatWindowApp() {
             `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
             `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
             `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
-            `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm start or omit","endTime":"HH:mm end or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|school|event|family|friends"}]\n` +
+            `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm start or omit","endTime":"HH:mm end or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|school|event|family|friends","repeat":"yearly if every year, else omit"}]\n` +
             `For date RANGES set date=start and endDate=end. For time ranges set time=start and endTime=end. ` +
+            `If I say every year / annually / 每年, set repeat to "yearly". ` +
             `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}].` +
             (upcoming
               ? ` Already saved:\n${upcoming}`
@@ -434,7 +438,7 @@ export default function ChatWindowApp() {
           const briefing = looksLikeScheduleBriefing(text);
           const tonightish = /\b(tonight|this evening)\b/i.test(text) || /今晚/.test(text);
           const todayPlans = schedule
-            .filter((e) => e.date === today || (e.endDate && e.date <= today && today <= e.endDate))
+            .filter((e) => eventTouchesDate(e, today))
             .slice()
             .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
           const evening = todayPlans.filter((e) => {
@@ -445,7 +449,8 @@ export default function ChatWindowApp() {
             list
               .map((e) => {
                 const cat = eventCategory(e);
-                return `- ${e.date}${e.time ? ` ${e.time}` : ""}${e.endTime ? `–${e.endTime}` : ""}: ${e.title} [${cat}]`;
+                const when = formatTimeRangeWithDuration(e.time, e.endTime);
+                return `- ${e.date}${when ? ` ${when}` : ""}: ${e.title} [${cat}]`;
               })
               .join("\n");
           if (briefing && tonightish) {

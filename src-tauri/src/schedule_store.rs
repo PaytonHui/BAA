@@ -26,6 +26,9 @@ pub struct ScheduleEventDto {
     /// "work" | "school" | "event" | "family" | "friends" (legacy: "other" → event)
     #[serde(default)]
     pub category: Option<String>,
+    /// "yearly" = same month-day every year
+    #[serde(default)]
+    pub repeat: Option<String>,
     /// Default 0 so older clients / partial JSON still save
     #[serde(default)]
     pub created_at: u64,
@@ -76,6 +79,7 @@ fn dto_from_value(v: &serde_json::Value) -> Option<ScheduleEventDto> {
     let end_time = opt_str("endTime").or_else(|| opt_str("end_time"));
     let note = opt_str("note");
     let category = opt_str("category");
+    let repeat = opt_str("repeat");
     let created_at = v
         .get("createdAt")
         .or_else(|| v.get("created_at"))
@@ -94,6 +98,7 @@ fn dto_from_value(v: &serde_json::Value) -> Option<ScheduleEventDto> {
         end_time,
         note,
         category,
+        repeat,
         created_at,
     })
 }

@@ -145,6 +145,28 @@ export function categoryLabel(cat: ScheduleCategory): string {
   return CATEGORY_META[cat].label;
 }
 
+/** How a plan repeats. Omit / undefined = one-off. */
+export type ScheduleRepeat = "yearly";
+
+export function normalizeRepeat(raw: unknown): ScheduleRepeat | undefined {
+  const s = String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s-]+/g, "");
+  if (
+    s === "yearly" ||
+    s === "annual" ||
+    s === "annually" ||
+    s === "everyyear" ||
+    s === "year" ||
+    s === "rrulefreqyearly" ||
+    s === "freqyearly"
+  ) {
+    return "yearly";
+  }
+  return undefined;
+}
+
 export interface ScheduleEvent {
   id: string;
   /** YYYY-MM-DD — start date (or single day) */
@@ -162,7 +184,13 @@ export interface ScheduleEvent {
   note?: string;
   /** work | event | family | friends — type + reminder lead time */
   category?: ScheduleCategory;
+  /** yearly = same month-day every year (birthday, anniversary) */
+  repeat?: ScheduleRepeat;
   createdAt: number;
+}
+
+export function isYearlyEvent(e: { repeat?: unknown }): boolean {
+  return normalizeRepeat(e.repeat) === "yearly";
 }
 
 /** "14:00" or "14:00–16:00" for UI */
@@ -175,6 +203,144 @@ export function formatTimeRange(
   if (!start && !end) return "";
   if (start && end) return `${start}–${end}`;
   return start || end;
+}
+
+/** Minutes between start and end ("HH:mm"); null if either is missing. */
+export function eventDurationMinutes(
+  time?: string | null,
+  endTime?: string | null
+): number | null {
+  const start = hhmmToMinutes(time);
+  const end = hhmmToMinutes(endTime);
+  if (start == null || end == null) return null;
+  const delta = end - start;
+  if (delta <= 0) return null;
+  return delta;
+}
+
+/** "45m" · "1h" · "1h 30m" */
+export function formatDurationMinutes(mins: number): string {
+  const safe = Math.max(0, Math.round(mins));
+  const h = Math.floor(safe / 60);
+  const m = safe % 60;
+  if (h <= 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
+/** Inclusive calendar-day span, or 1 for a single day. */
+export function eventDayCount(
+  date?: string | null,
+  endDate?: string | null
+): number {
+  if (!date) return 1;
+  if (!endDate || endDate <= date) return 1;
+  return Math.max(1, eachDateKey(date, endDate).length);
+}
+
+/**
+ * How long a plan lasts — time length and/or multi-day span.
+ * e.g. "2h" · "1h 30m" · "3 days" · "2h · 3 days"
+ */
+export function formatEventDuration(
+  time?: string | null,
+  endTime?: string | null,
+  date?: string | null,
+  endDate?: string | null
+): string {
+  const parts: string[] = [];
+  const mins = eventDurationMinutes(time, endTime);
+  if (mins != null) parts.push(formatDurationMinutes(mins));
+  const days = eventDayCount(date, endDate);
+  if (days > 1) parts.push(days === 1 ? "1 day" : `${days} days`);
+  return parts.join(" · ");
+}
+
+/** Time range plus how long it lasts, e.g. "14:00–16:00 · 2h" */
+export function formatTimeRangeWithDuration(
+  time?: string | null,
+  endTime?: string | null
+): string {
+  const range = formatTimeRange(time, endTime);
+  const mins = eventDurationMinutes(time, endTime);
+  const dur = mins != null ? formatDurationMinutes(mins) : "";
+  if (range && dur) return `${range} · ${dur}`;
+  return range || dur;
+}
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/** Month-day of `ymd` placed on `year`. Feb 29 → Feb 28 in non-leap years. */
+export function dateOnYear(ymd: string, year: number): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
+  const [, ms, ds] = ymd.split("-");
+  let month = parseInt(ms, 10);
+  let day = parseInt(ds, 10);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  if (month === 2 && day === 29 && !isLeapYear(year)) day = 28;
+  const dim = new Date(year, month, 0).getDate();
+  if (day > dim) day = dim;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/**
+ * Where a yearly plan lands in `year` (start + optional multi-day end).
+ */
+export function yearlyOccurrenceRange(
+  e: Pick<ScheduleEvent, "date" | "endDate">,
+  year: number
+): { start: string; end: string } | null {
+  const start = dateOnYear(e.date, year);
+  if (!start) return null;
+  if (!e.endDate || e.endDate <= e.date) return { start, end: start };
+  const span = Math.max(0, eachDateKey(e.date, e.endDate).length - 1);
+  const [y, m, d] = start.split("-").map(Number);
+  const endDt = new Date(y, m - 1, d + span);
+  const end = toDateKey(
+    endDt.getFullYear(),
+    endDt.getMonth(),
+    endDt.getDate()
+  );
+  return { start, end };
+}
+
+/** Next (or still-current) yearly occurrence from `now`. */
+export function upcomingYearlyOccurrence(
+  e: ScheduleEvent,
+  now = new Date()
+): { date: string; start: Date } | null {
+  if (!isYearlyEvent(e)) return null;
+  const y = now.getFullYear();
+  for (const year of [y - 1, y, y + 1]) {
+    const range = yearlyOccurrenceRange(e, year);
+    if (!range) continue;
+    const start = eventStartOnYmd(e, range.start);
+    if (!start) continue;
+    if (now.getTime() <= start.getTime() + 5 * 60_000) {
+      return { date: range.start, start };
+    }
+  }
+  return null;
+}
+
+function eventStartOnYmd(e: ScheduleEvent, ymd: string): Date | null {
+  return eventStartDate({ ...e, date: ymd });
+}
+
+function monthDay(ymd: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd.slice(5) : "";
+}
+
+/** Years to paint yearly marks on (around now + the event's own year). */
+function yearlyPaintYears(anchorYmd?: string, now = new Date()): number[] {
+  const y = now.getFullYear();
+  const set = new Set<number>();
+  for (let i = y - 2; i <= y + 8; i++) set.add(i);
+  const ay = anchorYmd ? parseInt(anchorYmd.slice(0, 4), 10) : NaN;
+  if (Number.isFinite(ay) && ay >= 2000 && ay <= 2100) set.add(ay);
+  return [...set].sort((a, b) => a - b);
 }
 
 /** Normalize to "HH:mm" or undefined */
@@ -346,6 +512,7 @@ function normalizeList(raw: unknown): ScheduleEvent[] {
           String((e as { category?: unknown }).category).length > 0
             ? normalizeCategory((e as { category?: unknown }).category)
             : undefined,
+        repeat: normalizeRepeat((e as { repeat?: unknown }).repeat),
         createdAt:
           typeof e.createdAt === "number"
             ? e.createdAt
@@ -418,6 +585,7 @@ function toDiskPayload(events: ScheduleEvent[]) {
     endDate: e.endDate ? sanitizeText(String(e.endDate)) : null,
     note: e.note ? sanitizeText(String(e.note)) : null,
     category: e.category ? sanitizeText(String(e.category)) : null,
+    repeat: e.repeat ? sanitizeText(String(e.repeat)) : null,
     createdAt:
       typeof e.createdAt === "number" && Number.isFinite(e.createdAt)
         ? Math.floor(e.createdAt)
@@ -798,6 +966,9 @@ function parseEventArray(
       endTime: normalizeHhmm(endTimeRaw),
       note: noteRaw ? String(noteRaw).trim() || undefined : undefined,
       category,
+      repeat: normalizeRepeat(
+        o.repeat ?? o.recurrence ?? o.rrule ?? o.everyYear ?? o.yearly
+      ),
     });
   }
   return events;
@@ -932,6 +1103,8 @@ export interface DueReminder {
   /** human message for care bubble */
   message: string;
   emoji: string;
+  /** Id used to mark this occurrence reminded (yearly = id:YYYY-MM-DD) */
+  reminderId: string;
 }
 
 /**
@@ -949,9 +1122,18 @@ export function getDueReminders(
   for (const e of events) {
     // Default holiday / NJ marks are calendar decorations — no care chime
     if (e.id.startsWith("baa-default:")) continue;
-    if (wasReminded(e.id)) continue;
-    const start = eventStartDate(e);
+    let start: Date | null;
+    let reminderId = e.id;
+    if (isYearlyEvent(e)) {
+      const occ = upcomingYearlyOccurrence(e, now);
+      if (!occ) continue;
+      start = occ.start;
+      reminderId = `${e.id}:${occ.date}`;
+    } else {
+      start = eventStartDate(e);
+    }
     if (!start) continue;
+    if (wasReminded(reminderId)) continue;
     const startMs = start.getTime();
     // Skip past events (more than 5 min after start)
     if (t > startMs + 5 * 60_000) continue;
@@ -979,6 +1161,7 @@ export function getDueReminders(
       event: e,
       start,
       leadHours: leadH,
+      reminderId,
       emoji: meta.emoji,
       message:
         cat === "work"
@@ -1004,7 +1187,11 @@ export function matchesScheduleCancel(
   existing: ScheduleEvent,
   cancel: Pick<ScheduleEvent, "date" | "title" | "time">
 ): boolean {
-  if (existing.date !== cancel.date) return false;
+  const sameDay =
+    existing.date === cancel.date ||
+    (isYearlyEvent(existing) &&
+      monthDay(existing.date) === monthDay(cancel.date));
+  if (!sameDay) return false;
   const a = existing.title.toLowerCase().trim();
   const b = cancel.title.toLowerCase().trim();
   if (!a || !b) return false;
@@ -1024,7 +1211,11 @@ export function matchesScheduleUpsert(
   existing: ScheduleEvent,
   incoming: Pick<ScheduleEvent, "date" | "title" | "time">
 ): boolean {
-  if (existing.date !== incoming.date) return false;
+  const sameDay =
+    existing.date === incoming.date ||
+    (isYearlyEvent(existing) &&
+      monthDay(existing.date) === monthDay(incoming.date));
+  if (!sameDay) return false;
   const a = existing.title.toLowerCase().trim();
   const b = incoming.title.toLowerCase().trim();
   if (!a || !b) return false;
@@ -1113,6 +1304,10 @@ export function applyScheduleUpserts(
             : prev.category
               ? normalizeCategory(prev.category)
               : undefined,
+        repeat:
+          e.repeat !== undefined
+            ? normalizeRepeat(e.repeat)
+            : prev.repeat,
         createdAt: Date.now(),
       };
       const changed =
@@ -1121,6 +1316,7 @@ export function applyScheduleUpserts(
         (merged.endTime || "") !== (prev.endTime || "") ||
         (merged.note || "") !== (prev.note || "") ||
         (merged.endDate || "") !== (prev.endDate || "") ||
+        (merged.repeat || "") !== (prev.repeat || "") ||
         merged.title !== prev.title;
       next[idx] = merged;
       if (changed) updated.push(merged);
@@ -1135,12 +1331,45 @@ export function applyScheduleUpserts(
             : looksLikeWork(e.title, e.note || "")
               ? "work"
               : "event",
+        repeat: normalizeRepeat(e.repeat),
       };
       next.push(created);
       added.push(created);
     }
   }
   return { next, added, updated };
+}
+
+/**
+ * Add a plan that repeats every year on the same month-day
+ * (birthday, anniversary, annual event).
+ *
+ * Stores one series row (`repeat: "yearly"`) — the calendar expands it
+ * onto each year. Same title + month-day updates the existing series.
+ */
+export function addYearlyEvent(
+  schedule: ScheduleEvent[],
+  input: {
+    date: string;
+    title: string;
+    time?: string;
+    endTime?: string;
+    endDate?: string;
+    note?: string;
+    category?: ScheduleCategory;
+  }
+): { next: ScheduleEvent[]; added: ScheduleEvent[]; updated: ScheduleEvent[] } {
+  const draft: Omit<ScheduleEvent, "id" | "createdAt"> = {
+    date: input.date,
+    title: input.title.trim(),
+    time: input.time,
+    endTime: input.endTime,
+    endDate: input.endDate,
+    note: input.note,
+    category: input.category ?? "event",
+    repeat: "yearly",
+  };
+  return applyScheduleUpserts(schedule, [draft]);
 }
 
 /** Extract a balanced JSON array starting at the first `[` after `from`. */
@@ -1485,6 +1714,7 @@ export function resolveScheduleEventsFromChat(
           title: isGenericScheduleTitle(model.title) ? user.title : model.title,
           note: model.note || user.note,
           category: model.category || user.category,
+          repeat: user.repeat || model.repeat,
         },
       ];
     }
@@ -1509,6 +1739,12 @@ export function resolveScheduleEventsFromChat(
     });
   }
 
+  if (looksLikeYearly(userText)) {
+    return modelEvents.map((e) => ({
+      ...e,
+      repeat: e.repeat || "yearly",
+    }));
+  }
   return modelEvents;
 }
 
@@ -1972,9 +2208,10 @@ export function fallbackEventsFromUserRequest(
         " "
       )
       .replace(
-        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|next|nest|this)\b/gi,
+        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|next|nest|this|every year|each year|annually|yearly)\b/gi,
         " "
       )
+      .replace(/每年|年年|每一年|每年今日/g, " ")
       .replace(
         /\b(sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?)\b/gi,
         " "
@@ -2013,10 +2250,13 @@ export function fallbackEventsFromUserRequest(
   if (title.length > 72) title = title.slice(0, 72).trim();
 
   const category = looksLikeWork(title) ? "work" : "event";
+  const yearly = looksLikeYearly(userText);
   const note =
     endDate && endDate !== date
       ? `Until ${endDate}`
-      : undefined;
+      : yearly
+        ? "Every year"
+        : undefined;
   return [
     {
       date,
@@ -2025,8 +2265,21 @@ export function fallbackEventsFromUserRequest(
       time,
       note,
       category,
+      repeat: yearly ? "yearly" : undefined,
     },
   ];
+}
+
+/** User asked for an annual / every-year plan. */
+export function looksLikeYearly(text: string): boolean {
+  const t = text.toLowerCase();
+  if (
+    /\b(every\s+year|each\s+year|annually|yearly|every\s+anniversary)\b/.test(t)
+  ) {
+    return true;
+  }
+  if (/(每年|年年|每一年|每年今日|每年的)/.test(text)) return true;
+  return false;
 }
 
 /** Friendly line shown in chat after marking */
@@ -2054,8 +2307,11 @@ export function formatMarkedSummary(
       const cat = eventCategory(e as ScheduleEvent);
       const meta = CATEGORY_META[cat];
       const tag = `${meta.emoji} ${meta.label}`;
-      const tr = formatTimeRange(e.time, e.endTime);
-      return `${tr ? tr + " " : ""}${e.title} (${range} · ${tag})`;
+      const tr = formatTimeRangeWithDuration(e.time, e.endTime);
+      const days = eventDayCount(e.date, e.endDate);
+      const dayBit = days > 1 ? ` · ${days} days` : "";
+      const yearlyBit = isYearlyEvent(e) ? " · every year" : "";
+      return `${tr ? tr + " " : ""}${e.title} (${range}${dayBit}${yearlyBit} · ${tag})`;
     } catch {
       return e.title;
     }
@@ -2076,7 +2332,8 @@ export function formatUpdatedSummary(events: ScheduleEvent[]): string {
       const cat = eventCategory(e);
       const meta = CATEGORY_META[cat];
       const tag = `${meta.emoji} ${meta.label} · ${meta.leadHours}h remind`;
-      return `${e.time ? e.time + " " : ""}${e.title} → ${tag} (${label})`;
+      const tr = formatTimeRangeWithDuration(e.time, e.endTime);
+      return `${tr ? tr + " " : ""}${e.title} → ${tag} (${label})`;
     } catch {
       return e.title;
     }
@@ -2146,6 +2403,13 @@ export function expandMultiDayDates(
 }
 
 export function eventTouchesDate(e: ScheduleEvent, date: string): boolean {
+  if (isYearlyEvent(e)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+    const year = parseInt(date.slice(0, 4), 10);
+    const range = yearlyOccurrenceRange(e, year);
+    if (!range) return false;
+    return range.start <= date && date <= range.end;
+  }
   if (e.date === date) return true;
   if (e.endDate && e.date <= date && date <= e.endDate) return true;
   return false;
@@ -2160,6 +2424,14 @@ export function eventsOnDate(events: ScheduleEvent[], date: string) {
 export function datesWithEvents(events: ScheduleEvent[]): Set<string> {
   const set = new Set<string>();
   for (const e of events) {
+    if (isYearlyEvent(e)) {
+      for (const year of yearlyPaintYears(e.date)) {
+        const range = yearlyOccurrenceRange(e, year);
+        if (!range) continue;
+        for (const d of eachDateKey(range.start, range.end)) set.add(d);
+      }
+      continue;
+    }
     for (const d of eachDateKey(e.date, e.endDate)) set.add(d);
   }
   return set;
@@ -2176,7 +2448,13 @@ export function categoriesByDate(
   for (const e of events) {
     if (e.id.startsWith("baa-default:")) continue;
     const cat = eventCategory(e);
-    for (const d of eachDateKey(e.date, e.endDate)) {
+    const days = isYearlyEvent(e)
+      ? yearlyPaintYears(e.date).flatMap((year) => {
+          const range = yearlyOccurrenceRange(e, year);
+          return range ? eachDateKey(range.start, range.end) : [];
+        })
+      : eachDateKey(e.date, e.endDate);
+    for (const d of days) {
       const list = map.get(d) ?? [];
       if (!list.includes(cat)) list.push(cat);
       map.set(d, list);

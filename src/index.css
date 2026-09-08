@@ -935,6 +935,10 @@ textarea {
   padding: 0 4px 0 0;
   transform-origin: 0% 50%;
 }
+.care-wa-strip-left {
+  padding: 0 0 0 4px;
+  transform-origin: 100% 50%;
+}
 .care-wa-strip .care-wa-bubble {
   /* Prefer full strip width so sync status isn’t half-cut */
   width: 100%;
@@ -947,12 +951,32 @@ textarea {
   left: -6px;
   top: 12px;
 }
+.care-wa-tail-right {
+  position: absolute;
+  right: -6px;
+  left: auto;
+  top: 12px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 5px 0 5px 7px;
+  border-color: transparent transparent transparent var(--wa-green);
+  pointer-events: none;
+  filter: drop-shadow(0.5px 0.5px 0 rgba(0, 0, 0, 0.08));
+}
+.care-wa-strip-left .care-wa-tail-strip {
+  left: auto;
+  right: -6px;
+}
 
 .care-wa:hover .care-wa-bubble {
   background: var(--wa-green-deep);
 }
 .care-wa:hover .care-wa-tail-left {
   border-color: transparent var(--wa-green-deep) transparent transparent;
+}
+.care-wa:hover .care-wa-tail-right {
+  border-color: transparent transparent transparent var(--wa-green-deep);
 }
 
 /* —— Weather FX — chunky cartoon style (timed with care bubble) —— */

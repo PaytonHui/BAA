@@ -8,14 +8,14 @@ It floats on your desktop with chat, calendar, care reminders, and lightstick LE
 ## Download (friends — no coding)
 
 1. Open **[Releases](https://github.com/PaytonHui/BAA/releases)**
-2. Download **`BAA_0.2.1_aarch64.dmg`** (Apple Silicon Macs: M1 / M2 / M3 / M4)
+2. Download **`BAA_0.2.2_aarch64.dmg`** (Apple Silicon Macs: M1 / M2 / M3 / M4)
 3. Open the DMG → drag **BAA** to Applications (or open it from the disk image)
 4. First open: if macOS blocks it → **right‑click BAA → Open** → **Open** again  
    (or **System Settings → Privacy & Security → Open Anyway**)
 
 ### After install
-- Right‑click the lightstick for the menu (Chat, Calendar, Colors, Settings…)
-- **Left‑click** opens chat — Binky uses **on-device Apple Intelligence** (no API key)
+- Right‑click the lightstick for the menu (Calendar, Chat, Colors, Settings…)
+- **Left‑click** opens calendar (preset window). Chat is second in the menu — Binky uses **on-device Apple Intelligence** (no API key)
 - Turn on **System Settings → Apple Intelligence & Siri** if chat says it needs setup
 
 **Needs:** macOS 26+, Apple Silicon, Apple Intelligence enabled.
@@ -26,7 +26,7 @@ It floats on your desktop with chat, calendar, care reminders, and lightstick LE
 
 - 3D NewJeans lightstick pet (always on top, click‑through desktop)
 - Chat with on-device Apple Intelligence (private, no cloud key)
-- Calendar (holidays, member birthdays, your birthday 🐰)
+- Calendar (holidays, member birthdays, your birthday 🐰, yearly plans)
 - Care bubbles (water, eyes, weather tips, etc.)
 - Light colors (cycle + member colors)
 - Birthday celebrations (members + your day)
@@ -49,7 +49,7 @@ Release build:
 ```bash
 npm run tauri:build
 # → src-tauri/target/release/bundle/macos/BAA.app
-# → src-tauri/target/release/bundle/dmg/BAA_0.2.1_aarch64.dmg
+# → src-tauri/target/release/bundle/dmg/BAA_0.2.2_aarch64.dmg
 ```
 
 ---

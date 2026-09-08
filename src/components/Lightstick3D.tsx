@@ -28,6 +28,7 @@ import {
 import type { WeatherSnapshot } from "../lib/weather";
 import { weatherIsHot } from "../lib/weather";
 import { WeatherFx } from "./WeatherFx";
+import { PET_H, PET_W } from "../lib/windowLayout";
 
 /** Exact model from Documents/Certificate (New Jeans Light Stick.gltf) */
 const MODEL_URL = "/models/newjeans-lightstick/lightstick.gltf";
@@ -69,7 +70,7 @@ interface Lightstick3DProps {
   scale?: number;
   /**
    * Full stage size (CSS px). Party arena passes the oversized window size so
-   * the canvas/halo fill the big window — not the tiny default 190×280.
+   * the canvas/halo fill the big window — not the tiny default pet box.
    */
   stageSize?: { w: number; h: number } | null;
   /** Live weather for sun/rain/sweat overlays — only when a weather care bubble is up */
@@ -150,10 +151,10 @@ export function Lightstick3D({
   const s = Math.min(1.85, Math.max(0.65, scale));
   const boxW = stageSize?.w
     ? Math.max(1, Math.round(stageSize.w))
-    : Math.round(190 * s);
+    : Math.round(PET_W * s);
   const boxH = stageSize?.h
     ? Math.max(1, Math.round(stageSize.h))
-    : Math.round(280 * s);
+    : Math.round(PET_H * s);
   // Tight stick silhouette only — keep small so empty glass can click-through
   // Hit target stays pet-sized even in a large party window
   const hitW = Math.round(42 * s);

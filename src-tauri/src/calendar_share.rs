@@ -30,6 +30,9 @@ pub struct BaaCalEvent {
     /// Optional inclusive end YYYY-MM-DD for multi-day events
     #[serde(default)]
     pub end_date: Option<String>,
+    /// "yearly" = same month-day every year
+    #[serde(default)]
+    pub repeat: Option<String>,
 }
 
 // ─── Public Tauri commands ───────────────────────────────────────────────────
@@ -128,6 +131,7 @@ fn resolve_baa_events(frontend: Vec<BaaCalEvent>) -> Result<Vec<BaaCalEvent>, St
                     note: e.note,
                     category: e.category,
                     end_date: e.end_date,
+                    repeat: e.repeat,
                 },
             );
         }
@@ -311,6 +315,9 @@ fn build_ics_from_events(events: &[BaaCalEvent]) -> String {
             };
             out.push_str(&format!("DTSTART;VALUE=DATE:{date}\r\n"));
             out.push_str(&format!("DTEND;VALUE=DATE:{end_excl}\r\n"));
+        }
+        if e.repeat.as_deref() == Some("yearly") {
+            out.push_str("RRULE:FREQ=YEARLY\r\n");
         }
         out.push_str("END:VEVENT\r\n");
     }
@@ -618,6 +625,16 @@ fn append_event_scripts(script: &mut String, events: &[BaaCalEvent]) -> usize {
             None => (0, 0),
         };
 
+        let recurrence = if e.repeat.as_deref() == Some("yearly") {
+            r#"  try
+    set recurrence of newEv to "FREQ=YEARLY;INTERVAL=1"
+  end try
+"#
+            .to_string()
+        } else {
+            String::new()
+        };
+
         // Conflict rule (user request): only replace when SAME TITLE + SAME DAY.
         // Never wipe the whole calendar; leave other events untouched.
         script.push_str(&format!(
@@ -660,8 +677,9 @@ fn append_event_scripts(script: &mut String, events: &[BaaCalEvent]) -> usize {
                 r#"
   set endDate to endDate + (1 * days)
   tell cal
-    make new event with properties {{summary:"{title}", start date:startDate, end date:endDate, allday event:true, description:"{desc}"}}
+    set newEv to make new event with properties {{summary:"{title}", start date:startDate, end date:endDate, allday event:true, description:"{desc}"}}
   end tell
+{recurrence}
 "#
             ));
         } else {
@@ -687,8 +705,9 @@ fn append_event_scripts(script: &mut String, events: &[BaaCalEvent]) -> usize {
     set endDate to startDate + (1 * hours)
   end if
   tell cal
-    make new event with properties {{summary:"{title}", start date:startDate, end date:endDate, allday event:false, description:"{desc}"}}
+    set newEv to make new event with properties {{summary:"{title}", start date:startDate, end date:endDate, allday event:false, description:"{desc}"}}
   end tell
+{recurrence}
 "#
             ));
         }

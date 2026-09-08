@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CareKind } from "../lib/careMessages";
+import type { BubbleSide } from "../lib/windowLayout";
 
 interface CareBubbleProps {
   text: string;
@@ -10,9 +11,11 @@ interface CareBubbleProps {
   /**
    * Layout mode:
    * - "overlay" (default): absolute over pet (legacy)
-   * - "strip": fills the right care strip (preferred — no clip)
+   * - "strip": fills the care strip (preferred — no clip)
    */
   layout?: "overlay" | "strip";
+  /** Which side of the stick the strip sits on */
+  side?: BubbleSide;
 }
 
 const KIND_FALLBACK: Record<CareKind, string> = {
@@ -42,6 +45,7 @@ export function CareBubble({
   visible,
   onDismiss,
   layout = "overlay",
+  side = "right",
 }: CareBubbleProps) {
   const [phase, setPhase] = useState<"in" | "out">("in");
   const face = emoji || KIND_FALLBACK[kind];
@@ -59,9 +63,11 @@ export function CareBubble({
     return `${h}:${m} ${ampm}`;
   }, [text]);
 
+  const stripSide =
+    side === "left" ? "care-wa-strip-left" : "care-wa-strip-right";
   const posClass =
     layout === "strip"
-      ? "care-wa care-wa-strip relative z-30 w-auto max-w-full text-left cursor-pointer border-0 p-0 bg-transparent"
+      ? `care-wa care-wa-strip ${stripSide} relative z-30 w-auto max-w-full text-left cursor-pointer border-0 p-0 bg-transparent`
       : `care-wa care-wa-${phase} care-wa-right absolute z-30 left-[calc(50%+38px)] top-[30%] w-[156px] text-left cursor-pointer border-0 p-0 bg-transparent`;
 
   return (
@@ -90,8 +96,11 @@ export function CareBubble({
       {layout === "overlay" && (
         <span className="care-wa-tail-left" aria-hidden />
       )}
-      {layout === "strip" && (
+      {layout === "strip" && side === "right" && (
         <span className="care-wa-tail-left care-wa-tail-strip" aria-hidden />
+      )}
+      {layout === "strip" && side === "left" && (
+        <span className="care-wa-tail-right care-wa-tail-strip" aria-hidden />
       )}
     </button>
   );

@@ -2,7 +2,7 @@
 
 const KEY = "baa-pet-scale-v1";
 
-/** Default size = 1 (190×280) */
+/** Default size = 1 (220×324) */
 export const PET_SCALE_DEFAULT = 1;
 
 /**

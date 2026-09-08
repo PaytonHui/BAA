@@ -89,6 +89,7 @@ pub fn start_space_watcher(app: AppHandle) {
     unsafe {
         register_space_change_observer();
         register_system_wake_observer();
+        register_show_care_observer();
     }
 }
 
@@ -123,6 +124,46 @@ fn emit_system_wake() {
         let _ = app.emit("system-wake", ());
         eprintln!("[BAA] system-wake emitted (lid/sleep/display)");
     }
+}
+
+/// `osascript` / other tools can post `com.paytonhui.baa.show-care`.
+unsafe fn register_show_care_observer() {
+    use block2::RcBlock;
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use tauri::Emitter;
+
+    let Some(name_cls) = AnyClass::get(c"NSString") else {
+        return;
+    };
+    let Some(dist_cls) = AnyClass::get(c"NSDistributedNotificationCenter") else {
+        return;
+    };
+    let c_name = c"com.paytonhui.baa.show-care";
+    let ns_name: *mut AnyObject =
+        msg_send![name_cls, stringWithUTF8String: c_name.as_ptr()];
+    let center: *mut AnyObject = msg_send![dist_cls, defaultCenter];
+    let null_obj: *mut AnyObject = std::ptr::null_mut();
+
+    let block = RcBlock::new(move |_notification: *mut AnyObject| {
+        if let Some(app) = APP_FOR_SPACES.get() {
+            let app2 = app.clone();
+            let _ = app2.run_on_main_thread(move || {
+                if let Some(app) = APP_FOR_SPACES.get() {
+                    let _ = app.emit("show-care-bubble", ());
+                }
+            });
+        }
+    });
+    let block = Box::leak(Box::new(block));
+    let observer: *mut AnyObject = msg_send![
+        center,
+        addObserverForName: ns_name,
+        object: null_obj,
+        queue: null_obj,
+        usingBlock: &**block
+    ];
+    std::mem::forget(observer);
 }
 
 /// NSWorkspace wake + screen wake for MacBook lid open / sleep end.

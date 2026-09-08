@@ -5,8 +5,8 @@ import {
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 
 /** Pet-only window at scale 1 (lightstick stays here visually) */
-export const PET_W = 190;
-export const PET_H = 280;
+export const PET_W = 220;
+export const PET_H = 324;
 
 /** Logical size at a given zoom scale */
 export function petSizeAt(scale: number): { w: number; h: number } {
@@ -140,20 +140,35 @@ export function windowSizeForDock(
 }
 
 /**
- * Pick left/right so the bubble opens into free space.
+ * Pick left/right so the bubble opens into free space
+ * (same idea as panel windows: away from the screen edge).
  */
 export async function pickBubbleSide(): Promise<BubbleSide> {
   try {
     const win = getCurrentWindow();
-    const pos = await win.outerPosition();
-    const osize = await win.outerSize();
-    const mon = await currentMonitor();
+    const [pos, osize, mon, factor] = await Promise.all([
+      win.outerPosition(),
+      win.outerSize(),
+      currentMonitor(),
+      win.scaleFactor(),
+    ]);
     if (!mon) return "right";
 
-    const leftSpace = pos.x - mon.position.x;
+    // Compare logical px to CARE_PANEL_W (also logical) — physical vs logical
+    // used to think a too-narrow edge still "fit", then AppKit shifted the pet.
+    const leftSpace = (pos.x - mon.position.x) / factor;
     const rightSpace =
-      mon.position.x + mon.size.width - (pos.x + osize.width);
+      (mon.position.x + mon.size.width - (pos.x + osize.width)) / factor;
+    const need = CARE_PANEL_W;
 
+    const rightFits = rightSpace >= need - 8;
+    const leftFits = leftSpace >= need - 8;
+    if (rightFits && !leftFits) return "right";
+    if (leftFits && !rightFits) return "left";
+    if (rightFits && leftFits) {
+      return rightSpace >= leftSpace ? "right" : "left";
+    }
+    // Neither fully fits — still pick the roomier side (CSS pin avoids a jump)
     return rightSpace >= leftSpace ? "right" : "left";
   } catch {
     return "right";
@@ -503,12 +518,12 @@ export async function expandForMenu(
 }
 
 export async function expandForCare(
-  _side: "left" | "right" = "right",
+  side?: "left" | "right",
   scale = 1
 ): Promise<"left" | "right"> {
   const { w: petW, h: petH } = petSizeAt(scale);
-  await expandSidePanel("right", petW + CARE_PANEL_W, petH);
-  return "right";
+  const chosen = side ?? (await pickBubbleSide());
+  return expandSidePanel(chosen, petW + CARE_PANEL_W, petH);
 }
 
 async function expandSidePanel(

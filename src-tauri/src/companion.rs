@@ -142,6 +142,8 @@ pub struct ScheduleEventDto {
     pub category: Option<String>,
     #[serde(default)]
     pub created_at: i64,
+    #[serde(default)]
+    pub repeat: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Default)]

@@ -72,8 +72,8 @@ export function ContextMenu({
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {showChat && <MenuItem label="Chat" onClick={onChat} />}
       <MenuItem label="Calendar" onClick={onCalendar} />
+      {showChat && <MenuItem label="Chat" onClick={onChat} />}
       <MenuItem label="Light color" onClick={onLightColor} />
       <MuteSlideRow muted={muted} onToggle={onToggleMute} />
       <MenuItem label="Settings" onClick={onSettings} />
