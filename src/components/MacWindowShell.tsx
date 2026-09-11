@@ -34,6 +34,10 @@ interface MacWindowShellProps {
    * Chat/login must stay interactive — click-through padding broke the chatbox.
    */
   forceInteractive?: boolean;
+  /**
+   * When false, do not steal OS keyboard focus (care bubble over other apps).
+   */
+  stealFocus?: boolean;
 }
 
 /**
@@ -46,6 +50,7 @@ export function MacWindowShell({
   shownEvent,
   surfaceClassName = "",
   forceInteractive = true,
+  stealFocus = true,
 }: MacWindowShellProps) {
   // Panels default to fully interactive so inputs/buttons always work
   usePanelClickThrough({ forceInteractive });
@@ -59,9 +64,11 @@ export function MacWindowShell({
       void getCurrentWindow()
         .setIgnoreCursorEvents(false)
         .catch(() => undefined);
-      void getCurrentWindow()
-        .setFocus()
-        .catch(() => undefined);
+      if (stealFocus) {
+        void getCurrentWindow()
+          .setFocus()
+          .catch(() => undefined);
+      }
     }).then((fn) => {
       unlisten = fn;
     });
@@ -70,7 +77,7 @@ export function MacWindowShell({
       .setIgnoreCursorEvents(false)
       .catch(() => undefined);
     return () => unlisten?.();
-  }, [shownEvent]);
+  }, [shownEvent, stealFocus]);
 
   const [phase, setPhase] = useState<Phase>("pre");
   const phaseRef = useRef<Phase>("pre");

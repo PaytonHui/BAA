@@ -77,8 +77,8 @@ import {
 } from "./lib/panelWindow";
 // login panel uses showPanelWindow("login")
 import {
+  loadHomeScale,
   loadPetScale,
-  PET_SCALE_DEFAULT,
   savePetScale,
   scaleFromWheel,
 } from "./lib/petScale";
@@ -105,35 +105,47 @@ import type {
 } from "./types";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
-/** Ease zoom back to default while the native window floats home (~0.5s). */
+/** Shared zoom RAF — dock-home and Settings size picker. */
 let scaleHomeRaf = 0;
-function animatePetScaleHome(
+
+function animatePetScaleTo(
   scaleRef: MutableRefObject<number>,
   setScale: Dispatch<SetStateAction<number>>,
-  onDone?: () => void
+  to: number,
+  opts?: {
+    /** Grow/shrink the OS window with the 3D stick (Settings). Off for dock float. */
+    resizeWindow?: boolean;
+    onDone?: () => void;
+  }
 ) {
   if (scaleHomeRaf) {
     cancelAnimationFrame(scaleHomeRaf);
     scaleHomeRaf = 0;
   }
   const from = scaleRef.current;
-  const to = PET_SCALE_DEFAULT;
   if (Math.abs(from - to) < 0.002) {
     scaleRef.current = to;
     setScale(to);
     savePetScale(to);
-    onDone?.();
+    if (opts?.resizeWindow) void resizePetScale(to);
+    opts?.onDone?.();
     return;
   }
-  const durationMs = 520;
+  // Similar duration to a finger pinch across the Small↔Large range
+  const durationMs = Math.min(680, Math.max(400, Math.abs(to - from) * 920));
   const t0 = performance.now();
+  let lastResize = 0;
   const tick = (now: number) => {
     const u = Math.min(1, (now - t0) / durationMs);
-    // ease-out cubic — match native float landing
+    // ease-out cubic — same curve as dock landing / pinch settle
     const e = 1 - (1 - u) ** 3;
     const next = from + (to - from) * e;
     scaleRef.current = next;
     setScale(next);
+    if (opts?.resizeWindow && now - lastResize >= 16) {
+      lastResize = now;
+      void resizePetScale(next);
+    }
     if (u < 1) {
       scaleHomeRaf = requestAnimationFrame(tick);
     } else {
@@ -141,10 +153,23 @@ function animatePetScaleHome(
       scaleRef.current = to;
       setScale(to);
       savePetScale(to);
-      onDone?.();
+      if (opts?.resizeWindow) {
+        void resizePetScale(to).then(() => opts.onDone?.());
+      } else {
+        opts?.onDone?.();
+      }
     }
   };
   scaleHomeRaf = requestAnimationFrame(tick);
+}
+
+/** Ease zoom back to default while the native window floats home (~0.5s). */
+function animatePetScaleHome(
+  scaleRef: MutableRefObject<number>,
+  setScale: Dispatch<SetStateAction<number>>,
+  onDone?: () => void
+) {
+  animatePetScaleTo(scaleRef, setScale, loadHomeScale(), { onDone });
 }
 
 export default function App() {
@@ -623,10 +648,11 @@ export default function App() {
         return;
       }
       if (action === "dock-center-done") {
-        // Native float finished — lock scale + home to default
-        petScaleRef.current = PET_SCALE_DEFAULT;
-        setPetScale(PET_SCALE_DEFAULT);
-        savePetScale(PET_SCALE_DEFAULT);
+        // Native float finished — lock scale + home to chosen default
+        const home = loadHomeScale();
+        petScaleRef.current = home;
+        setPetScale(home);
+        savePetScale(home);
         setHomeHere();
         return;
       }
@@ -733,6 +759,21 @@ export default function App() {
     }).then((u) => unsubs.push(u));
     void listen<{ cfg?: AppConfig }>("settings-saved", (ev) => {
       if (ev.payload?.cfg) setConfig(ev.payload.cfg);
+    }).then((u) => unsubs.push(u));
+    void listen<{ scale?: number }>("pet-scale-preset-changed", (ev) => {
+      const next =
+        typeof ev.payload?.scale === "number"
+          ? ev.payload.scale
+          : loadHomeScale();
+      animatePetScaleTo(petScaleRef, setPetScale, next, {
+        resizeWindow: true,
+        onDone: () => {
+          const kinds = openPanelKinds();
+          kinds.forEach((k) => {
+            void repositionPanelWindow(k);
+          });
+        },
+      });
     }).then((u) => unsubs.push(u));
     void listen<{ muted?: boolean }>("mute-changed", (ev) => {
       if (typeof ev.payload?.muted === "boolean") {

@@ -16,6 +16,12 @@ import {
   type UserProfile,
   USER_BUNNY,
 } from "../lib/userProfile";
+import {
+  applyPetSizePreset,
+  loadPetSizePreset,
+  PET_SIZE_PRESET_LABELS,
+  type PetSizePreset,
+} from "../lib/petScale";
 
 interface SettingsModalProps {
   open: boolean;
@@ -61,11 +67,15 @@ export function SettingsModal({
   const [msg, setMsg] = useState<string | null>(null);
   const [profile, setProfile] = useState<UserProfile>(() => loadUserProfile());
   const [ai, setAi] = useState<AiStatus | null>(null);
+  const [sizePreset, setSizePreset] = useState<PetSizePreset>(() =>
+    typeof window !== "undefined" ? loadPetSizePreset() : "middle"
+  );
 
   useEffect(() => {
     if (!open) return;
     setMsg(null);
     setProfile(loadUserProfile());
+    setSizePreset(loadPetSizePreset());
     void invoke<AiStatus>("ai_status")
       .then(setAi)
       .catch(() =>
@@ -140,6 +150,45 @@ export function SettingsModal({
         >
           Done
         </button>
+      </div>
+
+      <div className="baa-ios-card px-3.5 py-3 space-y-2">
+        <p className="text-[14px] font-semibold tracking-[-0.01em] text-[#1C1C1E]">
+          Lightstick size
+        </p>
+        <div
+          className="flex rounded-[12px] bg-black/[0.06] p-[3px]"
+          role="radiogroup"
+          aria-label="Lightstick size"
+        >
+          {(["small", "middle", "large"] as PetSizePreset[]).map((id) => {
+            const selected = sizePreset === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => {
+                  if (sizePreset === id) return;
+                  const scale = applyPetSizePreset(id);
+                  setSizePreset(id);
+                  void emit("pet-scale-preset-changed", { preset: id, scale }).catch(
+                    () => undefined
+                  );
+                  setMsg("Saved");
+                }}
+                className={`baa-ios-btn flex-1 py-1.5 text-[13px] font-semibold rounded-[10px] transition ${
+                  selected
+                    ? "bg-white text-[#1C1C1E] shadow-[0_1px_2px_rgba(0,0,0,0.12)]"
+                    : "text-[#636366] hover:text-[#1C1C1E]"
+                }`}
+              >
+                {PET_SIZE_PRESET_LABELS[id]}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {onToggleMute && (

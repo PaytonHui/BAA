@@ -1,9 +1,25 @@
 /** Hover-zoom scale for the lightstick (persisted). */
 
 const KEY = "baa-pet-scale-v1";
+const PRESET_KEY = "baa-pet-size-preset-v1";
 
-/** Default size = 1 (220×324) */
-export const PET_SCALE_DEFAULT = 1;
+export type PetSizePreset = "small" | "middle" | "large";
+
+/** Named default sizes (settings). Wheel zoom still moves between min/max. */
+export const PET_SIZE_PRESETS: Record<PetSizePreset, number> = {
+  small: 0.75,
+  middle: 1,
+  large: 1.4,
+};
+
+export const PET_SIZE_PRESET_LABELS: Record<PetSizePreset, string> = {
+  small: "Small",
+  middle: "Middle",
+  large: "Large",
+};
+
+/** Default size = middle (220×324). Dock-home uses the chosen preset. */
+export const PET_SCALE_DEFAULT = PET_SIZE_PRESETS.middle;
 
 /**
  * Smallest allowed size — “maximum of small”
@@ -35,6 +51,41 @@ export function savePetScale(s: number): void {
   } catch {
     /* ignore */
   }
+}
+
+export function isPetSizePreset(v: unknown): v is PetSizePreset {
+  return v === "small" || v === "middle" || v === "large";
+}
+
+export function loadPetSizePreset(): PetSizePreset {
+  try {
+    const raw = localStorage.getItem(PRESET_KEY);
+    if (isPetSizePreset(raw)) return raw;
+  } catch {
+    /* ignore */
+  }
+  return "middle";
+}
+
+export function savePetSizePreset(preset: PetSizePreset): void {
+  try {
+    localStorage.setItem(PRESET_KEY, preset);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Dock / “home” size — the preset chosen in Settings. */
+export function loadHomeScale(): number {
+  return PET_SIZE_PRESETS[loadPetSizePreset()];
+}
+
+/** Apply a named default and persist both preset + current scale. */
+export function applyPetSizePreset(preset: PetSizePreset): number {
+  const scale = PET_SIZE_PRESETS[preset];
+  savePetSizePreset(preset);
+  savePetScale(scale);
+  return scale;
 }
 
 /** Apply wheel/pinch delta → new scale */

@@ -348,6 +348,21 @@ fn set_pet_layout(app: tauri::AppHandle, chat_open: bool) -> Result<(), String> 
 
 /// Manually re-bind window(s) to all Spaces (callable from frontend).
 /// Pins main + chat (if open).
+/// Show an overlay (care bubble) without activating BAA or stealing key focus.
+#[tauri::command]
+fn show_overlay_no_focus(app: tauri::AppHandle, label: String) -> Result<(), String> {
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| format!("window `{label}` missing"))?;
+    #[cfg(target_os = "macos")]
+    macos_spaces::show_without_activating(&window);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.show();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn pin_to_all_spaces_cmd(app: tauri::AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -1074,6 +1089,7 @@ pub fn run() {
             quit_app,
             set_pet_layout,
             pin_to_all_spaces_cmd,
+            show_overlay_no_focus,
             calendar_share::sync_apple_calendar,
             resize_bottom_center,
             resize_panel_dock,

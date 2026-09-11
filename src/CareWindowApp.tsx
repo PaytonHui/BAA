@@ -71,6 +71,7 @@ export default function CareWindowApp() {
       shownEvent="care-window-shown"
       className="p-[18px] bg-transparent overflow-hidden"
       forceInteractive
+      stealFocus={false}
     >
       {data?.text ? (
         <div className="w-full h-full flex items-center justify-center">

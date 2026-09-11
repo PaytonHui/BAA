@@ -287,3 +287,30 @@ unsafe fn order_front(ns_window: *mut std::ffi::c_void) {
     }
     let _: () = msg_send![obj, orderFrontRegardless];
 }
+
+/// Show a window on top without making this app key — typing in other apps continues.
+pub fn show_without_activating<R: Runtime>(window: &WebviewWindow<R>) {
+    pin_to_all_spaces(window);
+    if let Ok(ptr) = window.ns_window() {
+        if !ptr.is_null() {
+            unsafe {
+                order_front(ptr);
+                resign_key_if_needed(ptr);
+            }
+        }
+    }
+}
+
+unsafe fn resign_key_if_needed(ns_window: *mut std::ffi::c_void) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let obj = ns_window as *mut AnyObject;
+    if obj.is_null() {
+        return;
+    }
+    let is_key: bool = msg_send![obj, isKeyWindow];
+    if is_key {
+        let _: () = msg_send![obj, resignKeyWindow];
+    }
+}

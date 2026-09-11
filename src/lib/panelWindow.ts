@@ -14,6 +14,7 @@ import {
   PhysicalPosition,
 } from "@tauri-apps/api/dpi";
 import { emit } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import {
   CAL_FORM_H,
   CAL_FORM_LARGE_H,
@@ -144,7 +145,7 @@ async function panelSize(
     case "color":
       return withShadowPad(COLOR_W, 300);
     case "settings":
-      return withShadowPad(SETTINGS_W, 380);
+      return withShadowPad(SETTINGS_W, 450);
     case "link":
       return withShadowPad(
         Math.max(LINK_W, 300),
@@ -296,6 +297,33 @@ async function waitFrames(n = 2) {
   }
 }
 
+/** Show a window. Care bubble must not steal keyboard from other apps. */
+async function revealOverlay(
+  win: WebviewWindow,
+  stealFocus: boolean
+): Promise<void> {
+  if (!stealFocus) {
+    try {
+      await invoke("show_overlay_no_focus", { label: win.label });
+      await win.setIgnoreCursorEvents(false);
+      return;
+    } catch {
+      /* fall through to show() */
+    }
+  }
+  try {
+    await win.show();
+    await win.setIgnoreCursorEvents(false);
+    await win.setAlwaysOnTop(true);
+    await win.setVisibleOnAllWorkspaces(true);
+  } catch {
+    /* ignore */
+  }
+  if (stealFocus) {
+    void win.setFocus().catch(() => undefined);
+  }
+}
+
 export async function showPanelWindow(
   kind: PanelKind,
   large = false,
@@ -355,18 +383,7 @@ export async function showPanelWindow(
 
     await waitFrames(2);
 
-    try {
-      await existing.show();
-      await existing.setIgnoreCursorEvents(false);
-      await existing.setAlwaysOnTop(true);
-      await existing.setVisibleOnAllWorkspaces(true);
-    } catch {
-      /* ignore */
-    }
-
-    if (stealFocus) {
-      void existing.setFocus().catch(() => undefined);
-    }
+    await revealOverlay(existing, stealFocus);
     await waitFrames(1);
     void emit(shown, payload);
     void emit(`${kind}-window-data`, payload);
@@ -411,17 +428,10 @@ export async function showPanelWindow(
   try {
     await win.setSize(new LogicalSize(w, h));
     await win.setPosition(new LogicalPosition(x, y));
-    await win.show();
-    await win.setIgnoreCursorEvents(false);
-    await win.setAlwaysOnTop(true);
-    await win.setVisibleOnAllWorkspaces(true);
   } catch {
-    /* best-effort show */
+    /* best-effort place */
   }
-
-  if (stealFocus) {
-    void win.setFocus().catch(() => undefined);
-  }
+  await revealOverlay(win, stealFocus);
 
   // First create: webview needs a tick to mount the shown listener
   await new Promise<void>((r) => window.setTimeout(r, 32));
