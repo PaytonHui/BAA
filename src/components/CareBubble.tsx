@@ -23,6 +23,7 @@ const KIND_FALLBACK: Record<CareKind, string> = {
   care: "✨",
   cheer: "💗",
   birthday: "🎂",
+  horoscope: "✨",
   schedule: "📅",
   weather: "☔",
   hydrate: "💧",

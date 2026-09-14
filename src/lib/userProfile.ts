@@ -4,6 +4,13 @@
  */
 
 import type { LightColorMode } from "./lightColors";
+import {
+  dailyHoroscope,
+  zodiacFromBirthday,
+  ZODIAC_META,
+  type DailyHoroscope,
+  type ZodiacSign,
+} from "./zodiac";
 
 export type FavMemberId =
   | "minji"
@@ -99,6 +106,26 @@ export function favMemberMeta(
 export function hasUserBirthday(p: UserProfile = loadUserProfile()): boolean {
   return p.birthdayMonth != null && p.birthdayDay != null;
 }
+
+/** Zodiac from the saved birthday, or null if birthday isn’t set. */
+export function userZodiacSign(
+  p: UserProfile = loadUserProfile()
+): ZodiacSign | null {
+  if (p.birthdayMonth == null || p.birthdayDay == null) return null;
+  return zodiacFromBirthday(p.birthdayMonth, p.birthdayDay);
+}
+
+/** Today’s horoscope for the saved birthday, or null if none. */
+export function userDailyHoroscope(
+  d = new Date(),
+  p: UserProfile = loadUserProfile()
+): DailyHoroscope | null {
+  const sign = userZodiacSign(p);
+  if (!sign) return null;
+  return dailyHoroscope(sign, d);
+}
+
+export { ZODIAC_META, zodiacFromBirthday };
 
 /** Live user birthday day — bunny party, fav-member color (no color lock). */
 export interface UserBirthdayToday {

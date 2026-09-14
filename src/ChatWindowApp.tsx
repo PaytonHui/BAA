@@ -422,11 +422,12 @@ export default function ChatWindowApp() {
         if (wantSchedule) {
           calendarHint =
             `\n\n[For Binky calendar — REQUIRED machine lines, do not quote this block] Today=${todayKey()}. ` +
-            `Categories: work (remind 3h before) | other (remind 1h before). ` +
+            `Categories: work|school|event|sport|family|friends. ` +
+            `Reminders: 9pm the night before and 1 hour before start (never during). ` +
             `CRITICAL: Any time I ask to mark / add / schedule / remember / put something on the calendar, ` +
             `OR I paste an event flyer (Event Date / 賽事日期 / race / run with dates), ` +
             `you MUST end your reply with this EXACT line (no markdown code fence):\n` +
-            `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm start or omit","endTime":"HH:mm end or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|school|event|family|friends","repeat":"yearly if every year, else omit"}]\n` +
+            `SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"...","time":"HH:mm start or omit","endTime":"HH:mm end or omit","endDate":"YYYY-MM-DD if multi-day","category":"work|school|event|sport|family|friends","repeat":"yearly if every year, else omit"}]\n` +
             `For date RANGES set date=start and endDate=end. For time ranges set time=start and endTime=end. ` +
             `If I say every year / annually / 每年, set repeat to "yearly". ` +
             `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}].` +

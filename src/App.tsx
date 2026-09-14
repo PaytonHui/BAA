@@ -70,6 +70,7 @@ import {
   hideAllPanelWindows,
   hidePanelWindow,
   nudgeOpenPanelWindows,
+  pickSideOppositePanel,
   repositionPanelWindow,
   resizePanelWindow,
   showPanelWindow,
@@ -84,6 +85,7 @@ import {
 } from "./lib/petScale";
 import {
   CARE_BUBBLE_MS,
+  HOROSCOPE_BUBBLE_MS,
   WEATHER_FX_MS,
   careBusyRetryMs,
   markCareNeedShown,
@@ -296,6 +298,10 @@ export default function App() {
   const careSideRef = useRef<BubbleSide>("right");
   const careRescheduleRef = useRef<() => void>(() => undefined);
   const showCareNowRef = useRef<() => void>(() => undefined);
+  /** Forced line (calendar horoscope) — shows even if a panel is open */
+  const showForcedCareRef = useRef<
+    (line: { text: string; kind: CareKind; emoji: string }) => void
+  >(() => undefined);
   /** Force a weather care bubble (Mac wake / chat weather ask) */
   const forceWeatherCareRef = useRef<
     (w: WeatherSnapshot) => void | Promise<void>
@@ -540,7 +546,7 @@ export default function App() {
     if (linkOpenRef.current) kinds.push("link");
     if (loginOpenRef.current) kinds.push("login");
     if (menuOpenRef.current) kinds.push("menu");
-    if (careOpenRef.current) kinds.push("care");
+    if (careOpenRef.current || careBubbleRef.current) kinds.push("care");
     return kinds;
   }, []);
 
@@ -980,7 +986,7 @@ export default function App() {
 
   /**
    * Care bubbles (right of Binky) + schedule reminders + realtime weather tips.
-   * Work events → 3h before; other events → 1h before. Soft chime on remind.
+   * Events: 9pm the night before + 1 hour before start. Never during.
    */
   useEffect(() => {
     let cancelled = false;
@@ -994,12 +1000,19 @@ export default function App() {
     const showBubble = async (
       line: { text: string; kind: CareKind; emoji: string },
       sound: "notice" | "reminder",
-      opts?: { forceWeather?: boolean }
+      opts?: { forceWeather?: boolean; force?: boolean }
     ) => {
       // Forced weather moments can replace an idle care bubble, but not while
       // chat/menu/settings panels own the pet strip.
       if (cancelled || appPausedRef.current) return false;
-      if (opts?.forceWeather) {
+      if (opts?.force) {
+        window.clearTimeout(waitTimer);
+        window.clearTimeout(showTimer);
+        window.clearTimeout(hideTimer);
+        if (careBubbleRef.current) {
+          setCareBubble(null);
+        }
+      } else if (opts?.forceWeather) {
         if (
           chatOpenRef.current ||
           colorPickerOpenRef.current ||
@@ -1024,18 +1037,20 @@ export default function App() {
       }
 
       try {
-        if (!careOpenRef.current) {
+        if (opts?.force && calendarOpenRef.current) {
+          careSideRef.current = await pickSideOppositePanel("calendar");
+        } else if (!careOpenRef.current) {
           await ensureCareStrip();
         }
       } catch (e) {
         console.error(e);
         return false;
       }
-      // busyForCareRef lags setState; force weather already filtered panels above
+      // busyForCareRef lags setState; force / forceWeather already filtered above
       if (
         cancelled ||
         appPausedRef.current ||
-        (!opts?.forceWeather && busyForCareRef.current)
+        (!opts?.force && !opts?.forceWeather && busyForCareRef.current)
       ) {
         await collapseCareLayout();
         return false;
@@ -1123,7 +1138,9 @@ export default function App() {
           ? WEATHER_FX_MS
           : line.kind === "birthday"
             ? Math.max(CARE_BUBBLE_MS, 4500)
-            : CARE_BUBBLE_MS;
+            : line.kind === "horoscope"
+              ? HOROSCOPE_BUBBLE_MS
+              : CARE_BUBBLE_MS;
       hideTimer = window.setTimeout(() => {
         if (cancelled) return;
         dismissCareBubble();
@@ -1146,7 +1163,7 @@ export default function App() {
         return;
       }
 
-      // 1) Schedule reminders first (work 3h / other 1h)
+      // 1) Schedule reminders first (9pm night before / 1h before)
       const due = getDueReminders(loadSchedule());
       if (due.length) {
         const r = due[0];
@@ -1251,7 +1268,7 @@ export default function App() {
       if (!ok) scheduleNext();
     };
 
-    /** Poll often so we don't miss the 1h / 3h window */
+    /** Poll often so we don't miss the 9pm / 1h window */
     const pollReminders = async () => {
       if (cancelled) return;
       const due = getDueReminders(loadSchedule());
@@ -1295,6 +1312,10 @@ export default function App() {
       void showBubble(line, "notice", { forceWeather: true });
     };
 
+    showForcedCareRef.current = (line) => {
+      void showBubble(line, "notice", { force: true });
+    };
+
     forceWeatherCareRef.current = async (w: WeatherSnapshot) => {
       if (cancelled || appPausedRef.current) return;
       const lines = weatherCareLines(w);
@@ -1319,6 +1340,7 @@ export default function App() {
       cancelled = true;
       careRescheduleRef.current = () => undefined;
       showCareNowRef.current = () => undefined;
+      showForcedCareRef.current = () => undefined;
       forceWeatherCareRef.current = () => undefined;
       window.clearTimeout(waitTimer);
       window.clearTimeout(showTimer);
@@ -1332,13 +1354,23 @@ export default function App() {
   }, [fireAnim, collapseCareLayout, ensureCareStrip, presentCareWindow, dismissCareBubble]);
 
   useEffect(() => {
-    let un: (() => void) | undefined;
+    const unsubs: Array<() => void> = [];
     void listen("show-care-bubble", () => {
       showCareNowRef.current();
-    }).then((fn) => {
-      un = fn;
-    });
-    return () => un?.();
+    }).then((fn) => unsubs.push(fn));
+    void listen<{ text?: string; kind?: CareKind; emoji?: string }>(
+      "show-horoscope-care",
+      (ev) => {
+        const text = ev.payload?.text?.trim();
+        if (!text) return;
+        showForcedCareRef.current({
+          text,
+          kind: "horoscope",
+          emoji: ev.payload?.emoji || "✨",
+        });
+      }
+    ).then((fn) => unsubs.push(fn));
+    return () => unsubs.forEach((u) => u());
   }, []);
 
   useEffect(() => {
@@ -1373,10 +1405,10 @@ export default function App() {
     };
   }, []);
 
-  // Care bubble can stay during chat (separate window). Clear immediately for
-  // other panels / menu so the pet strip isn’t left half-width and clipped.
+  // Opening a panel dismisses an idle care bubble. Do NOT also run when a
+  // bubble appears while a panel is already open — calendar horoscope is
+  // requested with the calendar up, and the floating care window can coexist.
   useEffect(() => {
-    if (!careBubble?.visible) return;
     if (
       colorPickerOpen ||
       calendarOpen ||
@@ -1385,7 +1417,11 @@ export default function App() {
       linkOpen ||
       loginOpen
     ) {
-      void clearCareBubbleNow().then(() => careRescheduleRef.current());
+      const kind = careBubbleRef.current?.kind;
+      if (kind === "horoscope") return;
+      if (careOpenRef.current || careBubbleRef.current?.visible) {
+        void clearCareBubbleNow().then(() => careRescheduleRef.current());
+      }
     }
   }, [
     colorPickerOpen,
@@ -1394,7 +1430,6 @@ export default function App() {
     settingsOpen,
     linkOpen,
     loginOpen,
-    careBubble?.visible,
     clearCareBubbleNow,
   ]);
 

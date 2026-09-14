@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import {
   calendarDayMark,
   isDefaultCalendarId,
@@ -6,6 +7,13 @@ import {
 } from "../lib/defaultCalendar";
 import { IosTimePicker } from "./IosTimePicker";
 import { resizeCalendarForComposer } from "../lib/panelWindow";
+import {
+  hasUserBirthday,
+  loadUserProfile,
+  userDailyHoroscope,
+  userZodiacSign,
+} from "../lib/userProfile";
+import { ZODIAC_META } from "../lib/zodiac";
 import {
   CATEGORY_META,
   SCHEDULE_CATEGORIES,
@@ -130,6 +138,19 @@ export function CalendarPanel({
   } | null>(null);
   /** Outer card — measure real height so OS window has no white under-strip */
   const panelRef = useRef<HTMLDivElement>(null);
+  const [zodiac, setZodiac] = useState(() =>
+    typeof window !== "undefined" ? userZodiacSign() : null
+  );
+
+  useEffect(() => {
+    const sync = () => setZodiac(userZodiacSign(loadUserProfile()));
+    sync();
+    let un: (() => void) | undefined;
+    void listen("user-profile-changed", sync).then((fn) => {
+      un = fn;
+    });
+    return () => un?.();
+  }, []);
 
   useEffect(() => {
     setFormError(null);
@@ -535,6 +556,30 @@ export function CalendarPanel({
         >
           Today
         </button>
+
+        {zodiac && (
+          <button
+            type="button"
+            onClick={() => {
+              if (!hasUserBirthday()) return;
+              const h = userDailyHoroscope();
+              if (!h) return;
+              const payload = {
+                text: h.text,
+                kind: "horoscope" as const,
+                emoji: h.emoji,
+              };
+              void emitTo("main", "show-horoscope-care", payload).catch(() =>
+                emit("show-horoscope-care", payload).catch(() => undefined)
+              );
+            }}
+            title={`Today's horoscope · ${ZODIAC_META[zodiac].name}`}
+            aria-label={`Today's horoscope, ${ZODIAC_META[zodiac].name}`}
+            className="shrink-0 min-w-7 h-7 px-1.5 rounded-full border border-neutral-200 bg-white hover:bg-neutral-50 text-neutral-800 text-[13px] font-semibold leading-none"
+          >
+            {ZODIAC_META[zodiac].glyph}
+          </button>
+        )}
       </header>
 
       {/* Month nav */}
@@ -1085,7 +1130,7 @@ export function CalendarPanel({
                 {yearly ? "Every year · on" : "Every year"}
               </button>
 
-              <div className="grid grid-cols-5 gap-1">
+              <div className="grid grid-cols-6 gap-1">
                 {SCHEDULE_CATEGORIES.map((c) => {
                   const meta = CATEGORY_META[c];
                   const on = category === c;

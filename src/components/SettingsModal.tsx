@@ -12,6 +12,8 @@ import {
   FAV_MEMBERS,
   loadUserProfile,
   saveUserProfile,
+  userZodiacSign,
+  ZODIAC_META,
   type FavMemberId,
   type UserProfile,
   USER_BUNNY,
@@ -258,6 +260,12 @@ export function SettingsModal({
             <p className="text-[11px] text-[#007AFF] font-medium">
               {USER_BUNNY} {MONTHS[profile.birthdayMonth - 1]}{" "}
               {profile.birthdayDay}
+              {(() => {
+                const z = userZodiacSign(profile);
+                return z
+                  ? ` · ${ZODIAC_META[z].glyph} ${ZODIAC_META[z].name}`
+                  : "";
+              })()}
             </p>
           )}
         </div>

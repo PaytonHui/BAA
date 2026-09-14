@@ -41,6 +41,7 @@ import {
   PET_H,
   PET_W,
   SETTINGS_W,
+  pickBubbleSide,
   type BubbleSide,
 } from "./windowLayout";
 
@@ -115,6 +116,33 @@ const TITLES: Record<PanelKind, string> = {
   menu: "BAA Menu",
   care: "BAA Care",
 };
+
+/**
+ * Side of the stick opposite an open panel (so a care bubble isn’t hidden
+ * behind calendar/chat).
+ */
+export async function pickSideOppositePanel(
+  kind: PanelKind
+): Promise<BubbleSide> {
+  try {
+    const wins = await getAllWindows();
+    const main =
+      wins.find((w) => w.label === "main") ?? getCurrentWindow();
+    const panel = wins.find((w) => w.label === LABELS[kind]);
+    if (!panel) return pickBubbleSide();
+    const [mPos, pPos, mSize, pSize] = await Promise.all([
+      main.outerPosition(),
+      panel.outerPosition(),
+      main.outerSize(),
+      panel.outerSize(),
+    ]);
+    const petCx = mPos.x + mSize.width / 2;
+    const panelCx = pPos.x + pSize.width / 2;
+    return panelCx >= petCx ? "left" : "right";
+  } catch {
+    return "right";
+  }
+}
 
 /** Extra fields forwarded on `{kind}-window-data` (care bubble copy, etc.) */
 export type PanelWindowExtra = Record<string, unknown>;
@@ -350,15 +378,17 @@ export async function showPanelWindow(
   const stealFocus = kind !== "care";
 
   if (existing) {
-    const vis = await existing.isVisible().catch(() => false);
-    // Care already showing: just move + refresh copy (no hide/show flash)
-    if (kind === "care" && vis) {
+    // Care is shown with orderFrontRegardless (no Tauri show()), so isVisible()
+    // is often false while the bubble is on screen. Never hide/show it — that
+    // desyncs visibility and leaves the bubble behind when the stick is dragged.
+    if (kind === "care") {
       try {
         await existing.setSize(new LogicalSize(w, h));
         await existing.setPosition(new LogicalPosition(x, y));
       } catch {
         /* ignore */
       }
+      await revealOverlay(existing, false);
       void emit(shown, payload);
       void emit(`${kind}-window-data`, payload);
       return;
@@ -465,8 +495,11 @@ export async function repositionPanelWindow(
 ): Promise<void> {
   const win = await WebviewWindow.getByLabel(LABELS[kind]);
   if (!win) return;
-  const visible = await win.isVisible().catch(() => false);
-  if (!visible) return;
+  // Care overlay is ordered front without Tauri show() — isVisible() lies.
+  if (kind !== "care") {
+    const visible = await win.isVisible().catch(() => false);
+    if (!visible) return;
+  }
   const { w, h } = await panelSize(kind, large);
   const { x, y } = await positionNearPet(w, h, kind);
   await win.setSize(new LogicalSize(w, h));
@@ -488,8 +521,11 @@ export async function nudgeOpenPanelWindows(
       const win = await WebviewWindow.getByLabel(LABELS[kind]);
       if (!win) return;
       try {
-        const visible = await win.isVisible();
-        if (!visible) return;
+        // Care is visible on screen without Tauri show(); don't skip it.
+        if (kind !== "care") {
+          const visible = await win.isVisible();
+          if (!visible) return;
+        }
         const pos = await win.outerPosition();
         await win.setPosition(
           new PhysicalPosition(

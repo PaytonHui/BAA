@@ -158,7 +158,8 @@ OR asks to remember / mark / schedule / put on the calendar:\n\
 1. Reply naturally in their language (short chat bubble).\n\
 2. Silently end with EXACTLY this format on its own line (NO markdown fence). Never mention SCHEDULE_JSON, CANCEL_SCHEDULE_JSON, or JSON in the chat text the user reads:\n\
 SCHEDULE_JSON:[/* JSON array */]\n\
-Each object: \"date\" (YYYY-MM-DD start), \"title\" (short), optional \"time\" (HH:mm), \"endDate\" (YYYY-MM-DD inclusive end for multi-day), \"note\", \"category\" (\"work\"|\"other\").\n\
+Each object: \"date\" (YYYY-MM-DD start), \"title\" (short), optional \"time\" (HH:mm), \"endDate\" (YYYY-MM-DD inclusive end for multi-day), \"note\", \"category\" (\"work\"|\"school\"|\"event\"|\"sport\"|\"family\"|\"friends\").\n\
+Reminders fire at 9pm the night before and 1 hour before start — never during the event.\n\
 Resolve relative words using today: tomorrow, next Monday, 下星期, 聽日, 明天, etc.\n\
 For RANGES (e.g. November 7, 2026 – January 10, 2027 or 2026年11月7日–2027年1月10日) set date=start AND endDate=end.\n\
 If the user pastes an event flyer (Event Date / 賽事日期 / race name), extract title + dates and still emit SCHEDULE_JSON.\n\

@@ -5,7 +5,7 @@ import { mergeDefaultCalendarEvents } from "./defaultCalendar";
 
 /**
  * Plan types (emoji shown on calendar + add form).
- * work = remind 3h before; others = 1h before.
+ * Reminders: 9pm the night before + 1 hour before start. Never during.
  * Legacy stored value `"other"` is treated as `"event"`.
  */
 export type ScheduleCategory =
@@ -13,12 +13,14 @@ export type ScheduleCategory =
   | "event"
   | "family"
   | "friends"
-  | "school";
+  | "school"
+  | "sport";
 
 export const SCHEDULE_CATEGORIES: ScheduleCategory[] = [
   "work",
   "school",
   "event",
+  "sport",
   "family",
   "friends",
 ];
@@ -39,7 +41,7 @@ export const CATEGORY_META: Record<
   work: {
     emoji: "💼",
     label: "work",
-    leadHours: 3,
+    leadHours: 1,
     chip: "bg-sky-600/15 text-sky-800 border-sky-300",
     dayBg: "bg-sky-100/90",
     dayText: "text-sky-900",
@@ -75,6 +77,14 @@ export const CATEGORY_META: Record<
     chip: "bg-rose-500/15 text-rose-800 border-rose-300",
     dayBg: "bg-rose-100/90",
     dayText: "text-rose-900",
+  },
+  sport: {
+    emoji: "🏃",
+    label: "sport",
+    leadHours: 1,
+    chip: "bg-orange-500/15 text-orange-950 border-orange-300",
+    dayBg: "bg-orange-100/90",
+    dayText: "text-orange-950",
   },
 };
 
@@ -121,6 +131,21 @@ export function normalizeCategory(raw: unknown): ScheduleCategory {
     s === "friendship"
   ) {
     return "friends";
+  }
+  if (
+    s === "sport" ||
+    s === "sports" ||
+    s === "gym" ||
+    s === "workout" ||
+    s === "race" ||
+    s === "run" ||
+    s === "running" ||
+    s === "運動" ||
+    s === "运动" ||
+    s === "跑步" ||
+    s === "健身"
+  ) {
+    return "sport";
   }
   // event + legacy "other"
   if (
@@ -182,7 +207,7 @@ export interface ScheduleEvent {
   /** optional end "HH:mm" (24h), same calendar day as `date` */
   endTime?: string;
   note?: string;
-  /** work | event | family | friends — type + reminder lead time */
+  /** work | school | event | sport | family | friends */
   category?: ScheduleCategory;
   /** yearly = same month-day every year (birthday, anniversary) */
   repeat?: ScheduleRepeat;
@@ -930,32 +955,9 @@ function parseEventArray(
     )
       .trim()
       .toLowerCase();
-    let category: ScheduleCategory;
-    if (catRaw) {
-      category = normalizeCategory(catRaw);
-    } else if (looksLikeWork(title, noteRaw ? String(noteRaw) : "")) {
-      category = "work";
-    } else if (
-      /school|class|lecture|homework|exam|study|上課|學校|功課|考試|tutorial/i.test(
-        `${title} ${noteRaw || ""}`
-      )
-    ) {
-      category = "school";
-    } else if (
-      /family|家人|家庭|父母|媽媽|爸爸|kids|kid|child/i.test(
-        `${title} ${noteRaw || ""}`
-      )
-    ) {
-      category = "family";
-    } else if (
-      /friend|朋友|hangout|party|dinner with/i.test(
-        `${title} ${noteRaw || ""}`
-      )
-    ) {
-      category = "friends";
-    } else {
-      category = "event";
-    }
+    const category: ScheduleCategory = catRaw
+      ? normalizeCategory(catRaw)
+      : inferScheduleCategory(title, noteRaw ? String(noteRaw) : "");
     const end =
       endDate && endDate >= date && endDate !== date ? endDate : undefined;
     events.push({
@@ -972,6 +974,48 @@ function parseEventArray(
     });
   }
   return events;
+}
+
+/** Heuristic: title/note mentions sport / training / a race */
+export function looksLikeSport(title: string, note = ""): boolean {
+  const s = `${title} ${note}`;
+  if (
+    /(馬拉松|跑步|運動|健身|瑜伽|足球|籃球|網球|游泳|比賽|賽事|跑會|操場)/.test(s)
+  ) {
+    return true;
+  }
+  return /\b(sport|sports|gym|workout|yoga|football|soccer|basketball|tennis|swim|swimming|marathon|hike|hiking|cycling|bike|match|training|run|running|race|jog|jogging)\b/i.test(
+    s
+  );
+}
+
+export function looksLikeSchool(title: string, note = ""): boolean {
+  return /school|class|lecture|homework|exam|study|上課|學校|功课|功課|考試|tutorial/i.test(
+    `${title} ${note}`
+  );
+}
+
+export function looksLikeFamily(title: string, note = ""): boolean {
+  return /family|家人|家庭|父母|媽媽|爸爸|kids|kid|child/i.test(
+    `${title} ${note}`
+  );
+}
+
+export function looksLikeFriends(title: string, note = ""): boolean {
+  return /friend|朋友|hangout|party|dinner with/i.test(`${title} ${note}`);
+}
+
+/** Pick a type from title/note when chat/form didn't send one. */
+export function inferScheduleCategory(
+  title: string,
+  note = ""
+): ScheduleCategory {
+  if (looksLikeWork(title, note)) return "work";
+  if (looksLikeSchool(title, note)) return "school";
+  if (looksLikeSport(title, note)) return "sport";
+  if (looksLikeFamily(title, note)) return "family";
+  if (looksLikeFriends(title, note)) return "friends";
+  return "event";
 }
 
 /** Heuristic: title/note mentions work-like things */
@@ -1005,12 +1049,30 @@ export function looksLikeWork(title: string, note = ""): boolean {
 
 export function eventCategory(e: ScheduleEvent): ScheduleCategory {
   if (e.category) return normalizeCategory(e.category);
-  return looksLikeWork(e.title, e.note || "") ? "work" : "event";
+  return inferScheduleCategory(e.title, e.note || "");
 }
 
-/** Hours before event to remind: work=3, others=1 */
-export function reminderLeadHours(e: ScheduleEvent): number {
-  return CATEGORY_META[eventCategory(e)].leadHours;
+/** Hours before start for the same-day ping (all types: 1h). */
+export function reminderLeadHours(_e: ScheduleEvent): number {
+  return 1;
+}
+
+/** 9:00pm local on the calendar day before `start`. */
+export function reminderEveAt(start: Date): Date {
+  return new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate() - 1,
+    21,
+    0,
+    0,
+    0
+  );
+}
+
+/** One hour before start. */
+export function reminderHourAt(start: Date): Date {
+  return new Date(start.getTime() - 60 * 60 * 1000);
 }
 
 /** Parse event local Date from date + optional time (defaults 09:00 if missing) */
@@ -1096,21 +1158,56 @@ export function markReminded(eventId: string) {
   saveReminded(map);
 }
 
+export type ReminderSlot = "eve" | "hour";
+
 export interface DueReminder {
   event: ScheduleEvent;
   start: Date;
   leadHours: number;
+  /** night-before 9pm vs 1 hour before */
+  slot: ReminderSlot;
   /** human message for care bubble */
   message: string;
   emoji: string;
-  /** Id used to mark this occurrence reminded (yearly = id:YYYY-MM-DD) */
+  /** Id used to mark this occurrence+slot reminded (yearly = id:YYYY-MM-DD:slot) */
   reminderId: string;
 }
 
+function reminderTimeLabel(e: ScheduleEvent, start: Date): string {
+  return (
+    e.time?.trim() ||
+    start.toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    })
+  );
+}
+
+function reminderMessage(
+  e: ScheduleEvent,
+  start: Date,
+  slot: ReminderSlot,
+  nowMs: number
+): string {
+  const cat = eventCategory(e);
+  const emoji = CATEGORY_META[cat].emoji;
+  const timeLabel = reminderTimeLabel(e, start);
+  if (slot === "eve") {
+    return `${emoji} Tomorrow: “${e.title}” at ${timeLabel}. I’ll remind you 1 hour before.`;
+  }
+  const mins = Math.max(1, Math.round((start.getTime() - nowMs) / 60_000));
+  const when = mins >= 50 ? "in 1 hour" : `in ${mins} min`;
+  return `${emoji} ${when}: “${e.title}” at ${timeLabel}.`;
+}
+
 /**
- * Events that should fire a care-bubble reminder now:
- * work → within 3h before start; other → within 1h before start.
- * Only once per event id.
+ * Events that should fire a care-bubble reminder now.
+ *
+ * Two slots only — never during the event:
+ *  - eve: 9:00pm the night before, until midnight
+ *  - hour: 1 hour before start, until start (not including start)
+ *
+ * Example: tomorrow 4pm → tonight 9pm, and tomorrow 3pm.
  */
 export function getDueReminders(
   events: ScheduleEvent[],
@@ -1123,55 +1220,57 @@ export function getDueReminders(
     // Default holiday / NJ marks are calendar decorations — no care chime
     if (e.id.startsWith("baa-default:")) continue;
     let start: Date | null;
-    let reminderId = e.id;
+    let occKey = e.id;
     if (isYearlyEvent(e)) {
       const occ = upcomingYearlyOccurrence(e, now);
       if (!occ) continue;
       start = occ.start;
-      reminderId = `${e.id}:${occ.date}`;
+      occKey = `${e.id}:${occ.date}`;
     } else {
       start = eventStartDate(e);
     }
     if (!start) continue;
-    if (wasReminded(reminderId)) continue;
     const startMs = start.getTime();
-    // Skip past events (more than 5 min after start)
-    if (t > startMs + 5 * 60_000) continue;
+    // During / after start: no reminder bubble
+    if (t >= startMs) continue;
 
-    const leadH = reminderLeadHours(e);
-    const remindAt = startMs - leadH * 60 * 60 * 1000;
-    // Fire once we've entered the lead window (and before/at start)
-    if (t < remindAt) continue;
-
+    const eveAt = reminderEveAt(start).getTime();
+    const hourAt = reminderHourAt(start).getTime();
+    // Eve ping lives on the night before — stop at midnight (or 1h-before
+    // if the event is shortly after midnight) so daytime isn't a 9pm replay.
+    const dayStart = new Date(
+      start.getFullYear(),
+      start.getMonth(),
+      start.getDate()
+    ).getTime();
+    const eveUntil = Math.min(dayStart, hourAt);
     const cat = eventCategory(e);
     const meta = CATEGORY_META[cat];
-    const timeLabel = e.time?.trim() || start.toLocaleTimeString(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    });
-    const hoursLeft = Math.max(0, (startMs - t) / (60 * 60 * 1000));
-    const when =
-      hoursLeft < 0.2
-        ? "soon"
-        : hoursLeft < 1
-          ? `in ${Math.max(1, Math.round(hoursLeft * 60))} min`
-          : `in ~${Math.round(hoursLeft * 10) / 10}h`;
 
-    due.push({
-      event: e,
-      start,
-      leadHours: leadH,
-      reminderId,
-      emoji: meta.emoji,
-      message:
-        cat === "work"
-          ? `Work soon: “${e.title}” at ${timeLabel} (${when})!`
-          : `${meta.emoji} ${meta.label}: “${e.title}” at ${timeLabel} (${when})!`,
-    });
+    const slots: ReminderSlot[] = ["hour", "eve"];
+    for (const slot of slots) {
+      const reminderId = `${occKey}:${slot}`;
+      if (wasReminded(reminderId)) continue;
+      const from = slot === "eve" ? eveAt : hourAt;
+      const to = slot === "eve" ? eveUntil : startMs;
+      if (t < from || t >= to) continue;
+      due.push({
+        event: e,
+        start,
+        leadHours: slot === "hour" ? 1 : 12,
+        slot,
+        reminderId,
+        emoji: meta.emoji,
+        message: reminderMessage(e, start, slot, t),
+      });
+    }
   }
 
-  // Soonest first
-  due.sort((a, b) => a.start.getTime() - b.start.getTime());
+  // Same-day 1h ping first, then night-before; soonest start first
+  due.sort((a, b) => {
+    if (a.slot !== b.slot) return a.slot === "hour" ? -1 : 1;
+    return a.start.getTime() - b.start.getTime();
+  });
   return due;
 }
 
@@ -1328,9 +1427,7 @@ export function applyScheduleUpserts(
         category:
           e.category != null
             ? normalizeCategory(e.category)
-            : looksLikeWork(e.title, e.note || "")
-              ? "work"
-              : "event",
+            : inferScheduleCategory(e.title, e.note || ""),
         repeat: normalizeRepeat(e.repeat),
       };
       next.push(created);
@@ -2249,7 +2346,7 @@ export function fallbackEventsFromUserRequest(
   if (!title || title.length < 2) title = "Event";
   if (title.length > 72) title = title.slice(0, 72).trim();
 
-  const category = looksLikeWork(title) ? "work" : "event";
+  const category = inferScheduleCategory(title);
   const yearly = looksLikeYearly(userText);
   const note =
     endDate && endDate !== date
@@ -2331,7 +2428,7 @@ export function formatUpdatedSummary(events: ScheduleEvent[]): string {
       });
       const cat = eventCategory(e);
       const meta = CATEGORY_META[cat];
-      const tag = `${meta.emoji} ${meta.label} · ${meta.leadHours}h remind`;
+      const tag = `${meta.emoji} ${meta.label} · 9pm / 1h remind`;
       const tr = formatTimeRangeWithDuration(e.time, e.endTime);
       return `${tr ? tr + " " : ""}${e.title} → ${tag} (${label})`;
     } catch {
