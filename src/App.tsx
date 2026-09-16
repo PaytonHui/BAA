@@ -94,6 +94,7 @@ import {
   weatherCareLines,
   type CareKind,
 } from "./lib/careMessages";
+import type { FortuneScores } from "./lib/zodiac";
 import {
   fetchWeather,
   loadCachedWeather,
@@ -288,6 +289,8 @@ export default function App() {
     text: string;
     kind: CareKind;
     emoji: string;
+    title?: string;
+    scores?: FortuneScores;
     side: BubbleSide;
     visible: boolean;
   } | null>(null);
@@ -300,7 +303,13 @@ export default function App() {
   const showCareNowRef = useRef<() => void>(() => undefined);
   /** Forced line (calendar horoscope) — shows even if a panel is open */
   const showForcedCareRef = useRef<
-    (line: { text: string; kind: CareKind; emoji: string }) => void
+    (line: {
+      text: string;
+      kind: CareKind;
+      emoji: string;
+      title?: string;
+      scores?: FortuneScores;
+    }) => void
   >(() => undefined);
   /** Force a weather care bubble (Mac wake / chat weather ask) */
   const forceWeatherCareRef = useRef<
@@ -826,6 +835,8 @@ export default function App() {
       text: string;
       kind: CareKind;
       emoji: string;
+      title?: string;
+      scores?: FortuneScores;
       side: BubbleSide;
     }) => {
       careOpenRef.current = true;
@@ -998,7 +1009,13 @@ export default function App() {
       !!weatherRef.current && weatherNeedsUmbrella(weatherRef.current);
 
     const showBubble = async (
-      line: { text: string; kind: CareKind; emoji: string },
+      line: {
+        text: string;
+        kind: CareKind;
+        emoji: string;
+        title?: string;
+        scores?: FortuneScores;
+      },
       sound: "notice" | "reminder",
       opts?: { forceWeather?: boolean; force?: boolean }
     ) => {
@@ -1063,6 +1080,8 @@ export default function App() {
         text: line.text,
         kind: line.kind,
         emoji: line.emoji,
+        title: line.title,
+        scores: line.scores,
         side,
         visible: true,
       });
@@ -1071,6 +1090,8 @@ export default function App() {
           text: line.text,
           kind: line.kind,
           emoji: line.emoji,
+          title: line.title,
+          scores: line.scores,
           side,
         });
       } catch (e) {
@@ -1358,7 +1379,13 @@ export default function App() {
     void listen("show-care-bubble", () => {
       showCareNowRef.current();
     }).then((fn) => unsubs.push(fn));
-    void listen<{ text?: string; kind?: CareKind; emoji?: string }>(
+    void listen<{
+      text?: string;
+      kind?: CareKind;
+      emoji?: string;
+      title?: string;
+      scores?: FortuneScores;
+    }>(
       "show-horoscope-care",
       (ev) => {
         const text = ev.payload?.text?.trim();
@@ -1367,6 +1394,8 @@ export default function App() {
           text,
           kind: "horoscope",
           emoji: ev.payload?.emoji || "✨",
+          title: ev.payload?.title,
+          scores: ev.payload?.scores,
         });
       }
     ).then((fn) => unsubs.push(fn));

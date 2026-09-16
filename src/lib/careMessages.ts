@@ -627,8 +627,8 @@ export function nextCareDelayMs(isFirst: boolean): number {
 /** How long the bubble stays visible */
 export const CARE_BUBBLE_MS = 8_000;
 
-/** Daily horoscope is a bit longer to read */
-export const HOROSCOPE_BUBBLE_MS = 12_000;
+/** Daily horoscope is a bit longer to read (ratings + blurb). */
+export const HOROSCOPE_BUBBLE_MS = 16_000;
 
 /** How long weather FX (sun/rain/snow…) stays on the pet */
 export const WEATHER_FX_MS = 8_000;

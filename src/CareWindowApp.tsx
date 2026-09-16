@@ -13,11 +13,14 @@ import {
 } from "./components/MacWindowShell";
 import type { CareKind } from "./lib/careMessages";
 import type { BubbleSide } from "./lib/windowLayout";
+import type { FortuneScores } from "./lib/zodiac";
 
 type CarePayload = {
   text?: string;
   kind?: CareKind;
   emoji?: string;
+  title?: string;
+  scores?: FortuneScores;
   side?: BubbleSide;
   visible?: boolean;
 };
@@ -27,6 +30,8 @@ export default function CareWindowApp() {
     text: string;
     kind: CareKind;
     emoji: string;
+    title?: string;
+    scores?: FortuneScores;
     side: BubbleSide;
     visible: boolean;
   } | null>(null);
@@ -49,6 +54,8 @@ export default function CareWindowApp() {
         text: p.text,
         kind: p.kind ?? "care",
         emoji: p.emoji ?? "✨",
+        title: p.title,
+        scores: p.scores,
         side: p.side === "left" ? "left" : "right",
         visible: p.visible !== false,
       });
@@ -81,6 +88,8 @@ export default function CareWindowApp() {
             text={data.text}
             kind={data.kind}
             emoji={data.emoji}
+            title={data.title}
+            scores={data.scores}
             visible={data.visible}
             onDismiss={() => void close()}
           />

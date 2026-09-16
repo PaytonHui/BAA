@@ -82,9 +82,9 @@ export const MENU_W = PET_W + MENU_PANEL_W;
 export const MENU_H = PET_H;
 
 /** Care speech bubble strip (wide enough for sync status + weather lines) */
-export const CARE_PANEL_W = 220;
+export const CARE_PANEL_W = 228;
 /** Floating care window height (bubble only — pet window stays PET_H) */
-export const CARE_PANEL_H = 140;
+export const CARE_PANEL_H = 176;
 export const CARE_W = PET_W + CARE_PANEL_W;
 export const CARE_H = PET_H;
 

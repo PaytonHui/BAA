@@ -568,6 +568,8 @@ export function CalendarPanel({
                 text: h.text,
                 kind: "horoscope" as const,
                 emoji: h.emoji,
+                title: h.name,
+                scores: h.scores,
               };
               void emitTo("main", "show-horoscope-care", payload).catch(() =>
                 emit("show-horoscope-care", payload).catch(() => undefined)

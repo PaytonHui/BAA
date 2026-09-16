@@ -166,12 +166,45 @@ const LINES: Record<ZodiacSign, string[]> = {
   ],
 };
 
+/** 1–5 daily meters: overall, love, work, money. Stable for sign + local date. */
+export type FortuneScore = 1 | 2 | 3 | 4 | 5;
+
+export interface FortuneScores {
+  overall: FortuneScore;
+  love: FortuneScore;
+  career: FortuneScore;
+  wealth: FortuneScore;
+}
+
+function scoreAt(h: number, lane: number): FortuneScore {
+  const x = Math.imul(h ^ Math.imul(lane + 1, 0x9e3779b9), 0x85ebca6b) >>> 0;
+  const n = x % 100;
+  // Bell around 3 so a day rarely looks empty or maxed.
+  if (n < 8) return 1;
+  if (n < 28) return 2;
+  if (n < 68) return 3;
+  if (n < 90) return 4;
+  return 5;
+}
+
+export function fortuneScores(sign: ZodiacSign, d = new Date()): FortuneScores {
+  const h = seed(sign, d);
+  return {
+    overall: scoreAt(h, 0),
+    love: scoreAt(h, 1),
+    career: scoreAt(h, 2),
+    wealth: scoreAt(h, 3),
+  };
+}
+
 export interface DailyHoroscope {
   sign: ZodiacSign;
   name: string;
   glyph: string;
   emoji: string;
+  /** Overall fortune blurb — no glyph prefix (bubble already shows one emoji). */
   text: string;
+  scores: FortuneScores;
 }
 
 export function dailyHoroscope(
@@ -180,12 +213,14 @@ export function dailyHoroscope(
 ): DailyHoroscope {
   const meta = ZODIAC_META[sign];
   const lines = LINES[sign];
-  const line = lines[seed(sign, d) % lines.length];
+  const h = seed(sign, d);
+  const line = lines[h % lines.length];
   return {
     sign,
     name: meta.name,
     glyph: meta.glyph,
     emoji: meta.emoji,
-    text: `${meta.glyph} ${meta.name} — ${line}`,
+    text: line,
+    scores: fortuneScores(sign, d),
   };
 }

@@ -873,6 +873,54 @@ textarea {
   white-space: normal;
 }
 
+.care-wa-bubble-horo {
+  padding-bottom: 6px;
+}
+
+.care-wa-horo-name {
+  display: block;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin-bottom: 2px;
+}
+
+.care-wa-fortune {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px 8px;
+  margin: 3px 0 5px;
+}
+
+.care-wa-fortune-item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.care-wa-fortune-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.care-wa-stars {
+  display: inline-flex;
+  gap: 0.5px;
+  letter-spacing: -0.04em;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.care-wa-star.on {
+  opacity: 1;
+}
+
+.care-wa-star.off {
+  opacity: 0.22;
+}
+
 .care-wa-meta {
   display: flex;
   justify-content: flex-end;
