@@ -1274,6 +1274,37 @@ export function getDueReminders(
   return due;
 }
 
+/**
+ * Idle care may mention only today’s plans that have not started yet.
+ * In-progress and finished events are not reminders (9pm + 1h slots
+ * already cover those; never during / after).
+ */
+export function careScheduleTitles(
+  events: ScheduleEvent[],
+  now = new Date()
+): string[] {
+  const today = toDateKey(now.getFullYear(), now.getMonth(), now.getDate());
+  const titles: string[] = [];
+  for (const e of events) {
+    if (!e?.title) continue;
+    if (String(e.id || "").startsWith("baa-default:")) continue;
+    let start: Date | null = null;
+    let occDate = e.date;
+    if (isYearlyEvent(e)) {
+      const occ = upcomingYearlyOccurrence(e, now);
+      if (!occ) continue;
+      start = occ.start;
+      occDate = occ.date;
+    } else {
+      start = eventStartDate(e);
+    }
+    if (!start || occDate !== today) continue;
+    if (now.getTime() >= start.getTime()) continue;
+    titles.push(e.title);
+  }
+  return titles;
+}
+
 /** Match key for dedupe / cancel (date + title + optional time + end) */
 export function scheduleMatchKey(
   e: Pick<ScheduleEvent, "date" | "title" | "time"> & { endDate?: string }

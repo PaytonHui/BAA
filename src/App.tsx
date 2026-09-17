@@ -40,6 +40,7 @@ import {
 import {
   flushScheduleToDisk,
   forgetScheduleIds,
+  careScheduleTitles,
   getDueReminders,
   hydrateReminded,
   hydrateSchedule,
@@ -1245,9 +1246,7 @@ export default function App() {
       }
 
       // 2) Normal care / cheer line
-      const titles = loadSchedule()
-        .filter((e) => e.date === todayKey())
-        .map((e) => e.title);
+      const titles = careScheduleTitles(loadSchedule());
 
       // Use shared weather state (ref keeps latest without re-running effect)
       let w = weatherRef.current;
@@ -1318,9 +1317,7 @@ export default function App() {
 
     careRescheduleRef.current = () => scheduleNext(false);
     showCareNowRef.current = () => {
-      const titles = loadSchedule()
-        .filter((e) => e.date === todayKey())
-        .map((e) => e.title);
+      const titles = careScheduleTitles(loadSchedule());
       const line =
         pickCareLine({
           scheduleTitles: titles,
