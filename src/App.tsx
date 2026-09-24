@@ -403,8 +403,9 @@ export default function App() {
       }
 
       if (weatherMotionActiveRef.current) return false;
-      if (now < motionBusyUntilRef.current) return false;
       if (now < birthdayPlayingUntilRef.current) return false;
+      // Horoscope click should always sparkle, even if another bob is playing
+      if (kind !== "horoscope" && now < motionBusyUntilRef.current) return false;
       motionBusyUntilRef.current = now + ms;
       setAnimCue((prev) => nextCue(prev, kind));
       return true;
@@ -1141,9 +1142,11 @@ export default function App() {
         const played = fireAnim(
           line.kind === "birthday"
             ? "birthday"
-            : sound === "reminder"
-              ? "color"
-              : "happy"
+            : line.kind === "horoscope"
+              ? "horoscope"
+              : sound === "reminder"
+                ? "color"
+                : "happy"
         );
         if (played) {
           setExpression("happy");

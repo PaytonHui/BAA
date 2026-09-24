@@ -327,6 +327,21 @@ export function Lightstick3D({
       }, 1800);
       return () => window.clearTimeout(clear);
     }
+    if (animCue.kind === "horoscope") {
+      const emojis = ["🌙", "⭐", "✨", "🐰", "🌟", "💫", "🌙", "🐰", "⭐", "✨"];
+      const batch: FloatFx[] = Array.from({ length: 10 }, (_, i) => ({
+        id: ++fxId.current,
+        emoji: emojis[i % emojis.length],
+        left: 16 + Math.random() * 68,
+        delay: i * 0.05,
+        duration: 1.15 + Math.random() * 0.45,
+      }));
+      setFx((prev) => [...prev, ...batch]);
+      const clear = window.setTimeout(() => {
+        setFx((prev) => prev.filter((p) => !batch.some((b) => b.id === p.id)));
+      }, 2000);
+      return () => window.clearTimeout(clear);
+    }
     if (animCue.kind === "confetti" || animCue.kind === "happy") {
       // confetti kind always; happy has 20% handled in 3D — still sprinkle lightly
       if (animCue.kind === "confetti" || Math.random() < 0.35) {
@@ -916,6 +931,10 @@ function ExactLightstick({
       case "happy":
         a.happyT0 = t;
         a.happyUntil = t + 0.85;
+        break;
+      case "horoscope":
+        a.happyT0 = t;
+        a.happyUntil = t + 1.1;
         break;
       case "wake":
         a.wakeT0 = t;

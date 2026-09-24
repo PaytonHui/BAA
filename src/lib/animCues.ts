@@ -10,7 +10,9 @@ export type AnimKind =
   | "wake"
   | "confetti"
   /** NewJeans member birthday — hearts + confetti (LED stays locked color) */
-  | "birthday";
+  | "birthday"
+  /** Calendar daily horoscope — always moon / stars / bunnies */
+  | "horoscope";
 
 export interface AnimCue {
   /** Monotonic id — change this to re-fire the same kind */
@@ -31,6 +33,7 @@ export const ANIM_DURATION_MS: Record<AnimKind, number> = {
   wake: 1500,
   confetti: 1000,
   birthday: 2500,
+  horoscope: 1600,
 };
 
 export function nextCue(prev: AnimCue, kind: AnimKind): AnimCue {
