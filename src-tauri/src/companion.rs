@@ -141,6 +141,8 @@ pub struct ScheduleEventDto {
     #[serde(default)]
     pub category: Option<String>,
     #[serde(default)]
+    pub emoji: Option<String>,
+    #[serde(default)]
     pub created_at: i64,
     #[serde(default)]
     pub repeat: Option<String>,

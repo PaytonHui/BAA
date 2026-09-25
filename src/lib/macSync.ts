@@ -18,6 +18,7 @@ export async function publishScheduleToCompanion(
           endTime: e.endTime ? String(e.endTime) : null,
           note: e.note ? String(e.note) : null,
           category: e.category ?? "event",
+          emoji: e.emoji ?? null,
           createdAt: Number(e.createdAt) || Date.now(),
           repeat: e.repeat ?? null,
         })),

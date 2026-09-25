@@ -20,7 +20,11 @@ import {
   addMinutesToHhmm,
   buildMonthGrid,
   categoriesByDate,
+  emojisByDate,
   eventCategory,
+  eventEmoji,
+  lastPlanEmoji,
+  normalizePlanEmoji,
   eventsOnDate,
   expandMultiDayDates,
   formatEventDuration,
@@ -51,6 +55,8 @@ export type ManualScheduleInput = {
   endTime?: string;
   note?: string;
   category: ScheduleCategory;
+  /** Custom calendar glyph; omit / empty → type default */
+  emoji?: string;
   /** yearly = same month-day every year */
   repeat?: ScheduleRepeat;
 };
@@ -122,6 +128,8 @@ export function CalendarPanel({
   /** Which wheel is active in the composer */
   const [timeTab, setTimeTab] = useState<"start" | "end">("start");
   const [category, setCategory] = useState<ScheduleCategory>("event");
+  /** Empty = follow the plan type’s default emoji */
+  const [planEmoji, setPlanEmoji] = useState("");
   const [yearly, setYearly] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -288,6 +296,10 @@ export function CalendarPanel({
   }, [ctxMenu]);
 
   const catsByDate = useMemo(() => categoriesByDate(events), [events]);
+  const glyphsByDate = useMemo(
+    () => emojisByDate(events, large ? 3 : 2),
+    [events, large]
+  );
   const grid = useMemo(() => buildMonthGrid(year, month), [year, month]);
   const dayEvents = useMemo(
     () => eventsOnDate(events, selected),
@@ -303,6 +315,7 @@ export function CalendarPanel({
     }
     setTimeTab("start");
     setCategory("event");
+    setPlanEmoji("");
     setYearly(false);
     setFormError(null);
     setEditingId(null);
@@ -317,6 +330,7 @@ export function CalendarPanel({
     setEndTime(addMinutesToHhmm(start, 60));
     setTimeTab("start");
     setCategory("event");
+    setPlanEmoji("");
     setYearly(false);
     setEditingId(null);
     setMultiMode("once");
@@ -340,6 +354,7 @@ export function CalendarPanel({
     );
     setTimeTab("start");
     setCategory(eventCategory(ev));
+    setPlanEmoji(normalizePlanEmoji(ev.emoji) ?? "");
     setYearly(isYearlyEvent(ev));
     setEditingId(ev.id);
     setMultiMode("once");
@@ -407,6 +422,7 @@ export function CalendarPanel({
       time: start,
       endTime: end,
       category,
+      emoji: normalizePlanEmoji(planEmoji),
       repeat: yearly ? "yearly" : undefined,
     };
     try {
@@ -485,11 +501,11 @@ export function CalendarPanel({
   // Slightly tighter grid when form is open so composer has room
   const dayH = addOpen
     ? large
-      ? "h-7"
-      : "h-6"
+      ? "h-10"
+      : "h-9"
     : large
-      ? "h-11"
-      : "h-8";
+      ? "h-12"
+      : "h-10";
   const dayText = large ? "text-[12px]" : "text-[10px]";
 
   return (
@@ -631,6 +647,7 @@ export function CalendarPanel({
               key >= rangeStart &&
               key <= rangeEnd;
             const dayCats = catsByDate.get(key) ?? [];
+            const dayGlyphs = glyphsByDate.get(key) ?? [];
             const primary = dayCats[0];
             const primaryMeta = primary ? CATEGORY_META[primary] : null;
             // Member heart / Debut gradient heart / user bunny replace day number
@@ -644,11 +661,13 @@ export function CalendarPanel({
                 title={
                   dayMark
                     ? dayMark.label
-                    : hkHoliday
-                      ? "Hong Kong general holiday"
-                      : undefined
+                    : dayGlyphs.length
+                      ? dayGlyphs.join(" ")
+                      : hkHoliday
+                        ? "Hong Kong general holiday"
+                        : undefined
                 }
-                className={`relative ${dayH} rounded-md ${dayText} font-semibold transition border flex flex-col items-center justify-center gap-0 leading-none ${
+                className={`relative ${dayH} min-w-0 rounded-md ${dayText} font-semibold transition border flex flex-col items-center justify-center gap-px py-0.5 leading-none ${
                   isSel
                     ? "bg-[#B8EF9A] border-neutral-800/80 text-neutral-900 shadow-sm"
                     : inMultiRange
@@ -709,16 +728,11 @@ export function CalendarPanel({
                     {day}
                   </span>
                 )}
-                {/* Type emoji(s) under the date number */}
-                {dayCats.length > 0 && !dayMark && (
-                  <span
-                    className={`flex items-center justify-center gap-px leading-none ${
-                      large ? "text-[9px] mt-0.5" : "text-[7px] -mt-px"
-                    }`}
-                    aria-hidden
-                  >
-                    {dayCats.slice(0, 3).map((c) => (
-                      <span key={c}>{CATEGORY_META[c].emoji}</span>
+                {/* Plan emoji(s) under the date — small ≤2, large ≤3 */}
+                {dayGlyphs.length > 0 && !dayMark && (
+                  <span className="baa-plan-emoji baa-cal-day-emoji" aria-hidden>
+                    {dayGlyphs.map((g, gi) => (
+                      <span key={`${g}-${gi}`}>{g}</span>
                     ))}
                   </span>
                 )}
@@ -756,6 +770,7 @@ export function CalendarPanel({
           dayEvents.map((ev, idx) => {
             const cat = eventCategory(ev);
             const meta = CATEGORY_META[cat];
+            const glyph = eventEmoji(ev);
             const locked = isDefaultCalendarId(ev.id);
             const timeLabel = formatTimeRangeWithDuration(ev.time, ev.endTime);
             const yearly = isYearlyEvent(ev);
@@ -831,10 +846,10 @@ export function CalendarPanel({
                           </span>
                         )}
                         <span
-                          className={`text-[11px] leading-none px-1.5 py-0.5 rounded-full border ${meta.chip}`}
+                          className={`baa-plan-emoji text-[13px] leading-none px-1.5 py-0.5 rounded-full border ${meta.chip}`}
                           aria-label={meta.label}
                         >
-                          {meta.emoji}
+                          {glyph}
                         </span>
                       </div>
                       {ev.title}
@@ -1133,27 +1148,40 @@ export function CalendarPanel({
               </button>
 
               <div className="grid grid-cols-6 gap-1">
-                {SCHEDULE_CATEGORIES.map((c) => {
-                  const meta = CATEGORY_META[c];
-                  const on = category === c;
-                  return (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setCategory(c)}
-                      aria-label={meta.label}
-                      className={`h-9 rounded-xl text-[10px] font-semibold border cursor-pointer flex flex-col items-center justify-center leading-tight transition ${
-                        on
-                          ? meta.chip + " shadow-sm"
-                          : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
-                      }`}
-                    >
-                      <span className="text-[15px] leading-none">
-                        {meta.emoji}
-                      </span>
-                    </button>
-                  );
-                })}
+                {SCHEDULE_CATEGORIES.filter((c) => c !== "friends").map(
+                  (c) => {
+                    const meta = CATEGORY_META[c];
+                    const on = category === c;
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setCategory(c)}
+                        aria-label={meta.label}
+                        className={`h-9 rounded-xl text-[10px] font-semibold border cursor-pointer flex flex-col items-center justify-center leading-tight transition ${
+                          on
+                            ? meta.chip + " shadow-sm"
+                            : "bg-[#F7F7F8] text-neutral-500 border-neutral-200"
+                        }`}
+                      >
+                        <span className="baa-plan-emoji text-[15px] leading-none">
+                          {meta.emoji}
+                        </span>
+                      </button>
+                    );
+                  }
+                )}
+                <input
+                  type="text"
+                  inputMode="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-label="Plan emoji"
+                  placeholder={CATEGORY_META[category].emoji}
+                  value={planEmoji}
+                  onChange={(e) => setPlanEmoji(lastPlanEmoji(e.target.value))}
+                  className="baa-plan-emoji h-9 w-full min-w-0 rounded-xl border border-neutral-200 bg-[#F7F7F8] text-center text-[16px] leading-none text-neutral-900 placeholder:opacity-45 outline-none focus:border-neutral-400 focus:bg-white"
+                />
               </div>
 
               <button

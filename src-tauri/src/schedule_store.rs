@@ -26,6 +26,9 @@ pub struct ScheduleEventDto {
     /// "work" | "school" | "event" | "family" | "friends" (legacy: "other" → event)
     #[serde(default)]
     pub category: Option<String>,
+    /// Optional custom calendar glyph
+    #[serde(default)]
+    pub emoji: Option<String>,
     /// "yearly" = same month-day every year
     #[serde(default)]
     pub repeat: Option<String>,
@@ -79,6 +82,7 @@ fn dto_from_value(v: &serde_json::Value) -> Option<ScheduleEventDto> {
     let end_time = opt_str("endTime").or_else(|| opt_str("end_time"));
     let note = opt_str("note");
     let category = opt_str("category");
+    let emoji = opt_str("emoji");
     let repeat = opt_str("repeat");
     let created_at = v
         .get("createdAt")
@@ -98,6 +102,7 @@ fn dto_from_value(v: &serde_json::Value) -> Option<ScheduleEventDto> {
         end_time,
         note,
         category,
+        emoji,
         repeat,
         created_at,
     })

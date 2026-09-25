@@ -265,6 +265,7 @@ export default function CalendarWindowApp() {
           endDate: input.endDate,
           note: input.note,
           category: input.category,
+          emoji: input.emoji,
           repeat: input.repeat,
         })
       );
@@ -281,6 +282,7 @@ export default function CalendarWindowApp() {
               endDate: input.endDate,
               note: input.note,
               category: input.category,
+              emoji: input.emoji,
             })
           : applyScheduleUpserts(prev, drafts);
       if (!added.length && !updated.length) {
@@ -334,6 +336,7 @@ export default function CalendarWindowApp() {
           endDate: input.endDate,
           note: input.note,
           category: input.category,
+          emoji: input.emoji,
           repeat: input.repeat,
           createdAt: Date.now(),
         };
@@ -348,6 +351,7 @@ export default function CalendarWindowApp() {
           endDate: input.endDate,
           note: input.note,
           category: input.category,
+          emoji: input.emoji,
           repeat: input.repeat,
           createdAt: Date.now(),
         });

@@ -37,6 +37,37 @@ button {
   font-family: inherit;
 }
 
+/* Plan glyphs — keep Apple Color Emoji so tiny calendar cells still paint */
+.baa-plan-emoji {
+  font-family:
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    sans-serif;
+  font-style: normal;
+  font-weight: 400;
+}
+
+/* Month-grid row: Apple Color Emoji needs a real line box or it gets cropped */
+.baa-cal-day-emoji {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  height: 14px;
+  line-height: 14px;
+  overflow: visible;
+}
+.baa-cal-day-emoji > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 12px;
+  line-height: 1;
+}
+
 input,
 textarea {
   user-select: text;

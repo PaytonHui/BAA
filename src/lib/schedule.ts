@@ -71,7 +71,7 @@ export const CATEGORY_META: Record<
     dayText: "text-amber-950",
   },
   friends: {
-    emoji: "🤝",
+    emoji: "👋",
     label: "friends",
     leadHours: 1,
     chip: "bg-rose-500/15 text-rose-800 border-rose-300",
@@ -209,9 +209,67 @@ export interface ScheduleEvent {
   note?: string;
   /** work | school | event | sport | family | friends */
   category?: ScheduleCategory;
+  /** Optional custom glyph on the calendar. Empty → category default. */
+  emoji?: string;
   /** yearly = same month-day every year (birthday, anniversary) */
   repeat?: ScheduleRepeat;
   createdAt: number;
+}
+
+function graphemeParts(s: string): string[] {
+  try {
+    const Seg = (
+      Intl as unknown as {
+        Segmenter?: new (
+          locale?: string,
+          opts?: { granularity: string }
+        ) => { segment: (input: string) => Iterable<{ segment: string }> };
+      }
+    ).Segmenter;
+    if (typeof Seg === "function") {
+      return [...new Seg(undefined, { granularity: "grapheme" }).segment(s)].map(
+        (x) => x.segment
+      );
+    }
+  } catch {
+    /* fall through */
+  }
+  return Array.from(s);
+}
+
+/** First grapheme only (ZWJ sequences like 👨‍👩‍👧 stay one glyph). */
+export function normalizePlanEmoji(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const s = String(raw).trim();
+  if (!s) return undefined;
+  const first = graphemeParts(s)[0] ?? s;
+  if (!first || /^[\x00-\x7F]$/.test(first)) return undefined;
+  if (first.length > 16) return undefined;
+  return first;
+}
+
+/** Keep only the last typed emoji (keyboard / picker appends). */
+export function lastPlanEmoji(raw: unknown): string {
+  const s = String(raw ?? "");
+  if (!s) return "";
+  const parts = graphemeParts(s);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const n = normalizePlanEmoji(parts[i]);
+    if (n) return n;
+  }
+  return "";
+}
+
+/** Custom glyph if set, otherwise the plan type’s default. */
+export function eventEmoji(
+  e: Pick<ScheduleEvent, "emoji" | "category" | "title" | "note">
+): string {
+  const custom = normalizePlanEmoji(e.emoji);
+  if (custom) return custom;
+  const cat = e.category
+    ? normalizeCategory(e.category)
+    : inferScheduleCategory(e.title, e.note || "");
+  return CATEGORY_META[cat].emoji;
 }
 
 export function isYearlyEvent(e: { repeat?: unknown }): boolean {
@@ -537,6 +595,7 @@ function normalizeList(raw: unknown): ScheduleEvent[] {
           String((e as { category?: unknown }).category).length > 0
             ? normalizeCategory((e as { category?: unknown }).category)
             : undefined,
+        emoji: normalizePlanEmoji((e as { emoji?: unknown }).emoji),
         repeat: normalizeRepeat((e as { repeat?: unknown }).repeat),
         createdAt:
           typeof e.createdAt === "number"
@@ -593,10 +652,31 @@ export function loadSchedule(): ScheduleEvent[] {
   return local;
 }
 
-/** Strip lone UTF-16 surrogates that break JSON / Rust serde (emoji edge cases). */
+/**
+ * Drop unpaired UTF-16 surrogates (invalid JSON / serde).
+ * Keep valid surrogate pairs so emoji in titles / custom glyphs survive.
+ */
 function sanitizeText(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/[\uD800-\uDFFF]/g, "\uFFFD");
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const n = s.charCodeAt(i + 1);
+      if (n >= 0xdc00 && n <= 0xdfff) {
+        out += s[i] + s[i + 1];
+        i++;
+        continue;
+      }
+      out += "\uFFFD";
+      continue;
+    }
+    if (c >= 0xdc00 && c <= 0xdfff) {
+      out += "\uFFFD";
+      continue;
+    }
+    out += s[i];
+  }
+  return out;
 }
 
 /** Wire shape for Rust save_schedule (always JSON-safe). */
@@ -610,6 +690,7 @@ function toDiskPayload(events: ScheduleEvent[]) {
     endDate: e.endDate ? sanitizeText(String(e.endDate)) : null,
     note: e.note ? sanitizeText(String(e.note)) : null,
     category: e.category ? sanitizeText(String(e.category)) : null,
+    emoji: e.emoji ? sanitizeText(String(e.emoji)) : null,
     repeat: e.repeat ? sanitizeText(String(e.repeat)) : null,
     createdAt:
       typeof e.createdAt === "number" && Number.isFinite(e.createdAt)
@@ -968,6 +1049,7 @@ function parseEventArray(
       endTime: normalizeHhmm(endTimeRaw),
       note: noteRaw ? String(noteRaw).trim() || undefined : undefined,
       category,
+      emoji: normalizePlanEmoji(o.emoji ?? o.icon ?? o.glyph),
       repeat: normalizeRepeat(
         o.repeat ?? o.recurrence ?? o.rrule ?? o.everyYear ?? o.yearly
       ),
@@ -1189,8 +1271,7 @@ function reminderMessage(
   slot: ReminderSlot,
   nowMs: number
 ): string {
-  const cat = eventCategory(e);
-  const emoji = CATEGORY_META[cat].emoji;
+  const emoji = eventEmoji(e);
   const timeLabel = reminderTimeLabel(e, start);
   if (slot === "eve") {
     return `${emoji} Tomorrow: “${e.title}” at ${timeLabel}. I’ll remind you 1 hour before.`;
@@ -1244,8 +1325,6 @@ export function getDueReminders(
       start.getDate()
     ).getTime();
     const eveUntil = Math.min(dayStart, hourAt);
-    const cat = eventCategory(e);
-    const meta = CATEGORY_META[cat];
 
     const slots: ReminderSlot[] = ["hour", "eve"];
     for (const slot of slots) {
@@ -1260,7 +1339,7 @@ export function getDueReminders(
         leadHours: slot === "hour" ? 1 : 12,
         slot,
         reminderId,
-        emoji: meta.emoji,
+        emoji: eventEmoji(e),
         message: reminderMessage(e, start, slot, t),
       });
     }
@@ -1434,6 +1513,8 @@ export function applyScheduleUpserts(
             : prev.category
               ? normalizeCategory(prev.category)
               : undefined,
+        emoji:
+          e.emoji !== undefined ? normalizePlanEmoji(e.emoji) : prev.emoji,
         repeat:
           e.repeat !== undefined
             ? normalizeRepeat(e.repeat)
@@ -1447,6 +1528,7 @@ export function applyScheduleUpserts(
         (merged.note || "") !== (prev.note || "") ||
         (merged.endDate || "") !== (prev.endDate || "") ||
         (merged.repeat || "") !== (prev.repeat || "") ||
+        (merged.emoji || "") !== (prev.emoji || "") ||
         merged.title !== prev.title;
       next[idx] = merged;
       if (changed) updated.push(merged);
@@ -1485,6 +1567,7 @@ export function addYearlyEvent(
     endDate?: string;
     note?: string;
     category?: ScheduleCategory;
+    emoji?: string;
   }
 ): { next: ScheduleEvent[]; added: ScheduleEvent[]; updated: ScheduleEvent[] } {
   const draft: Omit<ScheduleEvent, "id" | "createdAt"> = {
@@ -1495,6 +1578,7 @@ export function addYearlyEvent(
     endDate: input.endDate,
     note: input.note,
     category: input.category ?? "event",
+    emoji: input.emoji,
     repeat: "yearly",
   };
   return applyScheduleUpserts(schedule, [draft]);
@@ -2434,7 +2518,7 @@ export function formatMarkedSummary(
       }
       const cat = eventCategory(e as ScheduleEvent);
       const meta = CATEGORY_META[cat];
-      const tag = `${meta.emoji} ${meta.label}`;
+      const tag = `${eventEmoji(e)} ${meta.label}`;
       const tr = formatTimeRangeWithDuration(e.time, e.endTime);
       const days = eventDayCount(e.date, e.endDate);
       const dayBit = days > 1 ? ` · ${days} days` : "";
@@ -2459,7 +2543,7 @@ export function formatUpdatedSummary(events: ScheduleEvent[]): string {
       });
       const cat = eventCategory(e);
       const meta = CATEGORY_META[cat];
-      const tag = `${meta.emoji} ${meta.label} · 9pm / 1h remind`;
+      const tag = `${eventEmoji(e)} ${meta.label} · 9pm / 1h remind`;
       const tr = formatTimeRangeWithDuration(e.time, e.endTime);
       return `${tr ? tr + " " : ""}${e.title} → ${tag} (${label})`;
     } catch {
@@ -2587,6 +2671,49 @@ export function categoriesByDate(
       if (!list.includes(cat)) list.push(cat);
       map.set(d, list);
     }
+  }
+  return map;
+}
+
+/**
+ * Unique plan glyphs per date, in that day’s event order (time, then title).
+ * `max` caps how many different emojis the month grid shows
+ * (small calendar 2, large 3).
+ */
+export function emojisByDate(
+  events: ScheduleEvent[],
+  max = 3
+): Map<string, string[]> {
+  const byDay = new Map<string, ScheduleEvent[]>();
+  for (const e of events) {
+    if (e.id.startsWith("baa-default:")) continue;
+    const days = isYearlyEvent(e)
+      ? yearlyPaintYears(e.date).flatMap((year) => {
+          const range = yearlyOccurrenceRange(e, year);
+          return range ? eachDateKey(range.start, range.end) : [];
+        })
+      : eachDateKey(e.date, e.endDate);
+    for (const d of days) {
+      const list = byDay.get(d) ?? [];
+      list.push(e);
+      byDay.set(d, list);
+    }
+  }
+  const map = new Map<string, string[]>();
+  const cap = Math.max(1, max);
+  for (const [d, list] of byDay) {
+    list.sort(
+      (a, b) =>
+        (a.time || "").localeCompare(b.time || "") ||
+        a.title.localeCompare(b.title)
+    );
+    const glyphs: string[] = [];
+    for (const e of list) {
+      const g = eventEmoji(e);
+      if (!glyphs.includes(g)) glyphs.push(g);
+      if (glyphs.length >= cap) break;
+    }
+    map.set(d, glyphs);
   }
   return map;
 }
