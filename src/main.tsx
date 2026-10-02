@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
+import { installMuteSync } from "./lib/sounds";
 import App from "./App";
 import ChatWindowApp from "./ChatWindowApp";
 import CalendarWindowApp from "./CalendarWindowApp";
@@ -21,6 +22,10 @@ const panel =
     : null;
 
 function Root() {
+  // Menu/settings own the switch. Every window has its own sound engine.
+  useEffect(() => {
+    installMuteSync();
+  }, []);
   if (panel === "chat") return <ChatWindowApp />;
   if (panel === "calendar") return <CalendarWindowApp />;
   if (panel === "color") return <ColorWindowApp />;

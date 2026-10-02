@@ -29,7 +29,7 @@ import {
   userBirthdayCareLines,
   type UserBirthdayToday,
 } from "./lib/userProfile";
-import { isMuted } from "./lib/sounds";
+
 import {
   ANIM_DURATION_MS,
   nextCue,
@@ -102,7 +102,7 @@ import {
   weatherNeedsUmbrella,
   type WeatherSnapshot,
 } from "./lib/weather";
-import { playNotice, playReminder } from "./lib/sounds";
+import { handleMuteChanged, playNotice, playReminder } from "./lib/sounds";
 import type {
   AppConfig,
   PetExpression,
@@ -276,9 +276,6 @@ export default function App() {
   );
   const weatherRef = useRef(weather);
   weatherRef.current = weather;
-  const [, setMutedState] = useState(() =>
-    typeof window !== "undefined" ? isMuted() : false
-  );
   const [, setConfig] = useState<AppConfig | null>(null);
   const [animCue, setAnimCue] = useState<AnimCue>(NO_CUE);
   /** Until this timestamp, other one-shot motions are blocked */
@@ -793,9 +790,7 @@ export default function App() {
       });
     }).then((u) => unsubs.push(u));
     void listen<{ muted?: boolean }>("mute-changed", (ev) => {
-      if (typeof ev.payload?.muted === "boolean") {
-        setMutedState(ev.payload.muted);
-      }
+      handleMuteChanged(ev.payload);
     }).then((u) => unsubs.push(u));
     void listen<{ large?: boolean }>("calendar-toggle-size", (ev) => {
       const next = !!ev.payload?.large;

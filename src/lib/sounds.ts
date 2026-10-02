@@ -1,5 +1,7 @@
 /** Soft UI / pet SFX via Web Audio (no audio files). Quiet by default. */
 
+import { listen } from "@tauri-apps/api/event";
+
 const MUTE_KEY = "baa-muted";
 
 let muted =
@@ -7,6 +9,70 @@ let muted =
   localStorage.getItem(MUTE_KEY) === "1";
 
 let ctx: AudioContext | null = null;
+let master: GainNode | null = null;
+
+/** Notes already handed to the audio device. Mute must cut these, not only later ones. */
+type LiveVoice = { silence: () => void };
+const liveVoices: LiveVoice[] = [];
+
+function storedMuted(): boolean {
+  try {
+    return (
+      typeof localStorage !== "undefined" &&
+      localStorage.getItem(MUTE_KEY) === "1"
+    );
+  } catch {
+    return muted;
+  }
+}
+
+function silenceLiveVoices() {
+  const pending = liveVoices.splice(0, liveVoices.length);
+  for (const voice of pending) voice.silence();
+}
+
+function ensureMaster(c: AudioContext): GainNode {
+  if (!master || master.context !== c) {
+    master = c.createGain();
+    master.connect(c.destination);
+  }
+  return master;
+}
+
+function setMasterLevel(level: number) {
+  if (!ctx || !master) return;
+  try {
+    const now = ctx.currentTime;
+    master.gain.cancelScheduledValues(now);
+    master.gain.setValueAtTime(level, now);
+  } catch {
+    /* context already closed */
+  }
+}
+
+/** Stop every node in this window. Suspend so a missed oscillator cannot keep sounding. */
+function cutOutput() {
+  silenceLiveVoices();
+  setMasterLevel(0);
+  if (ctx && ctx.state === "running") void ctx.suspend();
+}
+
+function openOutput() {
+  setMasterLevel(1);
+  if (ctx && ctx.state === "suspended") void ctx.resume();
+}
+
+/**
+ * Menu and the pet are different webviews. They share localStorage and do not
+ * share this module's memory. Read the key on every play.
+ */
+function syncMuteFromStorage() {
+  const next = storedMuted();
+  if (next === muted) return;
+  muted = next;
+  if (muted) cutOutput();
+  else openOutput();
+}
 
 function getCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
@@ -17,12 +83,14 @@ function getCtx(): AudioContext | null {
         .webkitAudioContext;
     if (!AC) return null;
     ctx = new AC();
+    ensureMaster(ctx);
   }
-  if (ctx.state === "suspended") void ctx.resume();
+  if (!muted && ctx.state === "suspended") void ctx.resume();
   return ctx;
 }
 
 export function isMuted() {
+  syncMuteFromStorage();
   return muted;
 }
 
@@ -33,6 +101,39 @@ export function setMuted(v: boolean) {
   } catch {
     /* ignore */
   }
+  if (muted) cutOutput();
+  else openOutput();
+}
+
+/**
+ * Apply a mute toggle that happened in another Tauri window.
+ * Menu and Settings each have their own copy of this module, so writing
+ * the flag there does not stop the pet, chat, or color windows.
+ */
+export function handleMuteChanged(
+  payload: { muted?: boolean } | null | undefined
+) {
+  if (typeof payload?.muted === "boolean") setMuted(payload.muted);
+}
+
+/**
+ * Subscribe this window's sound engine to the sound switch.
+ * Safe to call more than once. No-ops outside the Tauri webview.
+ */
+export function installMuteSync() {
+  if (typeof window === "undefined") return;
+  const host = window as Window & {
+    __baaMuteSync?: boolean;
+    __TAURI_INTERNALS__?: object;
+  };
+  if (host.__baaMuteSync) return;
+  if (!host.__TAURI_INTERNALS__) return;
+  host.__baaMuteSync = true;
+  void listen<{ muted?: boolean }>("mute-changed", (ev) => {
+    handleMuteChanged(ev.payload);
+  }).catch(() => {
+    host.__baaMuteSync = false;
+  });
 }
 
 export function toggleMuted() {
@@ -47,8 +148,10 @@ function tone(
   gainPeak: number,
   when = 0
 ) {
+  syncMuteFromStorage();
+  if (muted) return;
   const c = getCtx();
-  if (!c || muted) return;
+  if (!c) return;
   const t0 = c.currentTime + when;
   const osc = c.createOscillator();
   const g = c.createGain();
@@ -58,10 +161,44 @@ function tone(
   g.gain.exponentialRampToValueAtTime(gainPeak, t0 + 0.012);
   g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
   osc.connect(g);
-  g.connect(c.destination);
+  g.connect(ensureMaster(c));
   osc.start(t0);
   osc.stop(t0 + duration + 0.02);
+  const voice: LiveVoice = {
+    silence() {
+      try {
+        const now = c.currentTime;
+        g.gain.cancelScheduledValues(now);
+        g.gain.setValueAtTime(0.0001, now);
+      } catch {
+        /* context already closed */
+      }
+      try {
+        g.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+    },
+  };
+  liveVoices.push(voice);
+  osc.addEventListener("ended", () => {
+    const i = liveVoices.indexOf(voice);
+    if (i >= 0) liveVoices.splice(i, 1);
+  });
 }
+
+function installMuteWatch() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  const host = window as Window & { __baaMuteWatch?: boolean };
+  if (host.__baaMuteWatch) return;
+  host.__baaMuteWatch = true;
+  window.addEventListener("storage", () => syncMuteFromStorage());
+  // WKWebView often skips the storage event across windows. Poll the shared key.
+  window.setInterval(() => syncMuteFromStorage(), 200);
+}
+
+installMuteSync();
+installMuteWatch();
 
 /** Soft click — color pick / UI */
 export function playClick() {

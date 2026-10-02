@@ -221,11 +221,8 @@ function MuteSlideRow({
         role="switch"
         aria-checked={on}
         aria-label={on ? "Sound on" : "Sound muted"}
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggle();
-        }}
-        className={`baa-ios-toggle ${on ? "on" : "off"}`}
+        tabIndex={-1}
+        className={`baa-ios-toggle pointer-events-none ${on ? "on" : "off"}`}
       >
         <span className="baa-ios-toggle-knob" />
       </button>
