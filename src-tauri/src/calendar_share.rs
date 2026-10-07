@@ -30,7 +30,7 @@ pub struct BaaCalEvent {
     /// Optional inclusive end YYYY-MM-DD for multi-day events
     #[serde(default)]
     pub end_date: Option<String>,
-    /// "yearly" = same month-day every year
+    /// "yearly" = same month-day every year. "weekly" = same weekday, that month only.
     #[serde(default)]
     pub repeat: Option<String>,
 }
@@ -182,6 +182,31 @@ fn write_baa_ics_file(events: &[BaaCalEvent]) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn days_in_month(y: i32, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
+/// Last moment of the anchor month, for a weekly RRULE that must not run on.
+fn weekly_until(date: &str) -> Option<String> {
+    let parts: Vec<&str> = date.split('-').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let y: i32 = parts[0].parse().ok()?;
+    let mo: u32 = parts[1].parse().ok()?;
+    if !(1..=12).contains(&mo) {
+        return None;
+    }
+    let last = days_in_month(y, mo);
+    Some(format!("{y:04}{mo:02}{last:02}"))
+}
+
 fn build_ics_from_events(events: &[BaaCalEvent]) -> String {
     fn esc(s: &str) -> String {
         s.replace('\\', "\\\\")
@@ -318,6 +343,17 @@ fn build_ics_from_events(events: &[BaaCalEvent]) -> String {
         }
         if e.repeat.as_deref() == Some("yearly") {
             out.push_str("RRULE:FREQ=YEARLY\r\n");
+        } else if e.repeat.as_deref() == Some("weekly") {
+            if let Some(until) = weekly_until(&e.date) {
+                let until = if e.time.as_deref().unwrap_or("").trim().is_empty() {
+                    until
+                } else {
+                    format!("{until}T235959")
+                };
+                out.push_str(&format!("RRULE:FREQ=WEEKLY;UNTIL={until}\r\n"));
+            } else {
+                out.push_str("RRULE:FREQ=WEEKLY\r\n");
+            }
         }
         out.push_str("END:VEVENT\r\n");
     }
@@ -631,6 +667,13 @@ fn append_event_scripts(script: &mut String, events: &[BaaCalEvent]) -> usize {
   end try
 "#
             .to_string()
+        } else if e.repeat.as_deref() == Some("weekly") {
+            let until = weekly_until(&e.date)
+                .map(|d| format!(";UNTIL={d}T235959"))
+                .unwrap_or_default();
+            format!(
+                "  try\n    set recurrence of newEv to \"FREQ=WEEKLY;INTERVAL=1{until}\"\n  end try\n"
+            )
         } else {
             String::new()
         };

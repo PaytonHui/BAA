@@ -364,7 +364,9 @@ function seedForYear(year: number): Seed[] {
     for (const h of hk) {
       const date = ymd(year, h.m, h.d);
       out.push({
-        key: `hk-${h.m}-${h.d}-${h.title.slice(0, 24)}`,
+        // Month-day only. Putting the emoji in the id made a broken
+        // glyph (U+FFFD) look like a second holiday.
+        key: `hk-${h.m}-${h.d}`,
         date,
         title: h.title,
         note: "Hong Kong general holiday",
@@ -460,33 +462,91 @@ export function buildDefaultCalendarEvents(now = new Date()): ScheduleEvent[] {
   return events;
 }
 
+/** Title without emoji or the broken replacement glyph, for matching copies. */
+function titleStem(title: string): string {
+  return title
+    .replace(/\uFFFD/g, "")
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/[\uFE0F\u200D]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function hasBrokenGlyph(s: string): boolean {
+  return s.includes("\uFFFD");
+}
+
 /**
  * Merge missing defaults into an existing schedule.
- * Never overwrites user events (only adds by stable default id).
+ * Never overwrites user events. A holiday that was saved twice — once with a
+ * broken glyph and once with a real emoji — keeps the emoji copy only.
  */
 export function mergeDefaultCalendarEvents(
   existing: ScheduleEvent[],
   now = new Date()
-): { events: ScheduleEvent[]; added: number } {
+): { events: ScheduleEvent[]; added: number; changed: boolean } {
   const defaults = buildDefaultCalendarEvents(now);
-  const have = new Set(existing.map((e) => e.id));
-  // Also skip if user already has same date+title (manual add)
-  const haveKey = new Set(
-    existing.map(
-      (e) => `${e.date}|${e.title.toLowerCase().trim()}`
-    )
-  );
-  const toAdd: ScheduleEvent[] = [];
+  const byId = new Map(defaults.map((d) => [d.id, d]));
+  const byDateStem = new Map<string, ScheduleEvent>();
   for (const d of defaults) {
-    if (have.has(d.id)) continue;
+    byDateStem.set(`${d.date}|${titleStem(d.title)}`, d);
+  }
+
+  const claimed = new Set<string>();
+  const next: ScheduleEvent[] = [];
+  let added = 0;
+  let changed = false;
+
+  for (const e of existing) {
+    if (!isDefaultCalendarId(e.id)) {
+      next.push(e);
+      continue;
+    }
+    const canonical =
+      byId.get(e.id) ??
+      byDateStem.get(`${e.date}|${titleStem(e.title)}`);
+    if (canonical) {
+      if (claimed.has(canonical.id)) {
+        changed = true;
+        continue;
+      }
+      claimed.add(canonical.id);
+      if (
+        e.id !== canonical.id ||
+        e.title !== canonical.title ||
+        (e.note || "") !== (canonical.note || "")
+      ) {
+        next.push({ ...canonical, createdAt: e.createdAt || canonical.createdAt });
+        changed = true;
+      } else {
+        next.push(e);
+      }
+      continue;
+    }
+    if (hasBrokenGlyph(e.title) || hasBrokenGlyph(e.id)) {
+      changed = true;
+      continue;
+    }
+    next.push(e);
+  }
+
+  const haveKey = new Set(
+    next.map((e) => `${e.date}|${e.title.toLowerCase().trim()}`)
+  );
+  for (const d of defaults) {
+    if (claimed.has(d.id)) continue;
     const k = `${d.date}|${d.title.toLowerCase().trim()}`;
     if (haveKey.has(k)) continue;
-    toAdd.push(d);
-    have.add(d.id);
+    next.push(d);
+    claimed.add(d.id);
     haveKey.add(k);
+    added += 1;
+    changed = true;
   }
-  if (!toAdd.length) return { events: existing, added: 0 };
-  return { events: [...existing, ...toAdd], added: toAdd.length };
+
+  if (!changed) return { events: existing, added: 0, changed: false };
+  return { events: next, added, changed };
 }
 
 const USER_BDAY_ID_PREFIX = `${ID_PREFIX}user-bday:`;

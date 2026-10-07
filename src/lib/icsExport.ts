@@ -20,6 +20,16 @@ function parseHhmm(time?: string): { h: number; m: number } | null {
   return { h, m: min };
 }
 
+/** Last calendar day of `YYYY-MM-DD`, as YYYYMMDD. */
+function monthEndCompact(iso: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
+  const y = parseInt(iso.slice(0, 4), 10);
+  const mo = parseInt(iso.slice(5, 7), 10);
+  if (mo < 1 || mo > 12) return null;
+  const last = new Date(y, mo, 0).getDate();
+  return `${iso.slice(0, 4)}${iso.slice(5, 7)}${String(last).padStart(2, "0")}`;
+}
+
 function nextDayYyyymmdd(d: string): string {
   // d = YYYYMMDD
   const y = parseInt(d.slice(0, 4), 10);
@@ -80,6 +90,15 @@ export function scheduleToIcs(events: ScheduleEvent[]): string {
 
     if (e.repeat === "yearly") {
       lines.push("RRULE:FREQ=YEARLY");
+    } else if (e.repeat === "weekly") {
+      const until = monthEndCompact(e.date);
+      lines.push(
+        until
+          ? hm
+            ? `RRULE:FREQ=WEEKLY;UNTIL=${until}T235959`
+            : `RRULE:FREQ=WEEKLY;UNTIL=${until}`
+          : "RRULE:FREQ=WEEKLY"
+      );
     }
 
     lines.push("END:VEVENT");

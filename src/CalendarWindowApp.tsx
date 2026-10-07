@@ -17,6 +17,7 @@ import {
 import { publishScheduleToCompanion } from "./lib/macSync";
 import { resizeCalendarForComposer } from "./lib/panelWindow";
 import {
+  addWeeklyEvent,
   addYearlyEvent,
   applyScheduleUpserts,
   flushScheduleToDisk,
@@ -272,19 +273,22 @@ export default function CalendarWindowApp() {
       const prev = eventsRef.current
         .concat(loadSchedule())
         .filter((e, i, arr) => arr.findIndex((x) => x.id === e.id) === i);
+      const series = {
+        date: input.date,
+        title: input.title,
+        time: input.time,
+        endTime: input.endTime,
+        endDate: input.endDate,
+        note: input.note,
+        category: input.category,
+        emoji: input.emoji,
+      };
       const { next, added, updated } =
         input.repeat === "yearly"
-          ? addYearlyEvent(prev, {
-              date: input.date,
-              title: input.title,
-              time: input.time,
-              endTime: input.endTime,
-              endDate: input.endDate,
-              note: input.note,
-              category: input.category,
-              emoji: input.emoji,
-            })
-          : applyScheduleUpserts(prev, drafts);
+          ? addYearlyEvent(prev, series)
+          : input.repeat === "weekly"
+            ? addWeeklyEvent(prev, series)
+            : applyScheduleUpserts(prev, drafts);
       if (!added.length && !updated.length) {
         // Force-append any dates that somehow didn't land
         let forcedNext = [...prev];

@@ -30,6 +30,7 @@ import {
   formatEventDuration,
   formatTimeRangeWithDuration,
   hhmmToMinutes,
+  isWeeklyEvent,
   isYearlyEvent,
   monthLabel,
   toDateKey,
@@ -48,7 +49,7 @@ export type ManualScheduleInput = {
    * all dates including `date`. One day → omit or single-item.
    */
   dates?: string[];
-  /** Inclusive end date for a yearly multi-day span */
+  /** Inclusive end date for a repeating multi-day span */
   endDate?: string;
   title: string;
   time?: string;
@@ -57,7 +58,7 @@ export type ManualScheduleInput = {
   category: ScheduleCategory;
   /** Custom calendar glyph; omit / empty → type default */
   emoji?: string;
-  /** yearly = same month-day every year */
+  /** yearly = same month-day every year. weekly = same weekday, this month only. */
   repeat?: ScheduleRepeat;
 };
 
@@ -131,6 +132,7 @@ export function CalendarPanel({
   /** Empty = follow the plan type’s default emoji */
   const [planEmoji, setPlanEmoji] = useState("");
   const [yearly, setYearly] = useState(false);
+  const [weekly, setWeekly] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   /** When set, form is editing this event id */
@@ -317,6 +319,7 @@ export function CalendarPanel({
     setCategory("event");
     setPlanEmoji("");
     setYearly(false);
+    setWeekly(false);
     setFormError(null);
     setEditingId(null);
     setMultiMode("once");
@@ -332,6 +335,7 @@ export function CalendarPanel({
     setCategory("event");
     setPlanEmoji("");
     setYearly(false);
+    setWeekly(false);
     setEditingId(null);
     setMultiMode("once");
     setMultiEnd(selected);
@@ -341,8 +345,9 @@ export function CalendarPanel({
   };
 
   const openEdit = (ev: ScheduleEvent) => {
-    // Yearly series: keep the day you tapped (same month-day, any year)
-    if (!isYearlyEvent(ev)) {
+    // Repeating series: keep the day you tapped (any year, or any week)
+    const repeating = isYearlyEvent(ev) || isWeeklyEvent(ev);
+    if (!repeating) {
       setSelected(ev.date);
     }
     setTitle(ev.title);
@@ -356,14 +361,15 @@ export function CalendarPanel({
     setCategory(eventCategory(ev));
     setPlanEmoji(normalizePlanEmoji(ev.emoji) ?? "");
     setYearly(isYearlyEvent(ev));
+    setWeekly(isWeeklyEvent(ev));
     setEditingId(ev.id);
     setMultiMode("once");
     setMultiEnd(ev.date);
     setAddOpen(true);
     setFormError(null);
     setCtxMenu(null);
-    // Jump month to the event if needed (yearly: stay on the year you were viewing)
-    if (!isYearlyEvent(ev)) {
+    // Jump month to the event if needed (a series stays on the day you were viewing)
+    if (!repeating) {
       try {
         const [y, m] = ev.date.split("-").map(Number);
         setYear(y);
@@ -395,10 +401,10 @@ export function CalendarPanel({
         return;
       }
     }
-    // Multi-day copies only for new one-off plans — yearly is one series
+    // Multi-day copies only for new one-off plans — yearly / weekly is one series
     let dates: string[] | undefined;
     let endDate: string | undefined;
-    if (yearly) {
+    if (yearly || weekly) {
       if (!editingId && multiMode !== "once" && multiDates.length > 1) {
         endDate = rangeEnd;
       }
@@ -423,7 +429,7 @@ export function CalendarPanel({
       endTime: end,
       category,
       emoji: normalizePlanEmoji(planEmoji),
-      repeat: yearly ? "yearly" : undefined,
+      repeat: yearly ? "yearly" : weekly ? "weekly" : undefined,
     };
     try {
       if (editingId && onUpdate) {
@@ -773,7 +779,8 @@ export function CalendarPanel({
             const glyph = eventEmoji(ev);
             const locked = isDefaultCalendarId(ev.id);
             const timeLabel = formatTimeRangeWithDuration(ev.time, ev.endTime);
-            const yearly = isYearlyEvent(ev);
+            const yearlyEv = isYearlyEvent(ev);
+            const weeklyEv = isWeeklyEvent(ev);
             const daySpan =
               ev.endDate && ev.endDate !== ev.date
                 ? formatEventDuration(undefined, undefined, ev.date, ev.endDate)
@@ -834,9 +841,14 @@ export function CalendarPanel({
                             {timeLabel}
                           </span>
                         )}
-                        {yearly && (
+                        {yearlyEv && (
                           <span className="text-[9px] font-semibold text-violet-700 bg-violet-100/80 border border-violet-200 rounded-full px-1.5 py-0.5">
                             Every year
+                          </span>
+                        )}
+                        {weeklyEv && (
+                          <span className="text-[9px] font-semibold text-sky-700 bg-sky-100/80 border border-sky-200 rounded-full px-1.5 py-0.5">
+                            Every week
                           </span>
                         )}
                         {ev.endDate && ev.endDate !== ev.date && (
@@ -1115,14 +1127,16 @@ export function CalendarPanel({
               )}
               {(time && endTime) ||
               yearly ||
+              weekly ||
               (multiMode !== "once" && multiDates.length > 1) ? (
                 <p className="text-center text-[11px] font-semibold text-neutral-600 tabular-nums">
                   {[
                     time && endTime
                       ? formatTimeRangeWithDuration(time, endTime)
                       : "",
-                    yearly ? "every year" : "",
+                    yearly ? "every year" : weekly ? "every week this month" : "",
                     !yearly &&
+                    !weekly &&
                     !editingId &&
                     multiMode !== "once" &&
                     multiDates.length > 1
@@ -1134,18 +1148,38 @@ export function CalendarPanel({
                 </p>
               ) : null}
 
-              <button
-                type="button"
-                onClick={() => setYearly((v) => !v)}
-                aria-pressed={yearly}
-                className={`w-full h-8 rounded-full text-[11px] font-semibold border transition ${
-                  yearly
-                    ? "bg-violet-600/15 text-violet-800 border-violet-300"
-                    : "bg-[#F7F7F8] text-neutral-600 border-neutral-200"
-                }`}
-              >
-                {yearly ? "Every year · on" : "Every year"}
-              </button>
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWeekly(false);
+                    setYearly((v) => !v);
+                  }}
+                  aria-pressed={yearly}
+                  className={`h-8 rounded-full text-[10px] font-semibold border transition whitespace-nowrap ${
+                    yearly
+                      ? "bg-violet-600/15 text-violet-800 border-violet-300"
+                      : "bg-[#F7F7F8] text-neutral-600 border-neutral-200"
+                  }`}
+                >
+                  {yearly ? "Every year · on" : "Every year"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setYearly(false);
+                    setWeekly((v) => !v);
+                  }}
+                  aria-pressed={weekly}
+                  className={`h-8 rounded-full text-[10px] font-semibold border transition whitespace-nowrap ${
+                    weekly
+                      ? "bg-sky-600/15 text-sky-800 border-sky-300"
+                      : "bg-[#F7F7F8] text-neutral-600 border-neutral-200"
+                  }`}
+                >
+                  {weekly ? "Every week · on" : "Every week"}
+                </button>
+              </div>
 
               <div className="grid grid-cols-6 gap-1">
                 {SCHEDULE_CATEGORIES.filter((c) => c !== "friends").map(
@@ -1192,7 +1226,10 @@ export function CalendarPanel({
               >
                 {editingId
                   ? "Update"
-                  : multiMode !== "once" && multiDates.length > 1
+                  : !yearly &&
+                      !weekly &&
+                      multiMode !== "once" &&
+                      multiDates.length > 1
                     ? `Save · ${multiDates.length} days`
                     : "Save"}
               </button>

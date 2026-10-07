@@ -29,7 +29,7 @@ pub struct ScheduleEventDto {
     /// Optional custom calendar glyph
     #[serde(default)]
     pub emoji: Option<String>,
-    /// "yearly" = same month-day every year
+    /// "yearly" = same month-day every year. "weekly" = same weekday, that month only.
     #[serde(default)]
     pub repeat: Option<String>,
     /// Default 0 so older clients / partial JSON still save

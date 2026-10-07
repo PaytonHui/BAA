@@ -171,7 +171,7 @@ export function categoryLabel(cat: ScheduleCategory): string {
 }
 
 /** How a plan repeats. Omit / undefined = one-off. */
-export type ScheduleRepeat = "yearly";
+export type ScheduleRepeat = "yearly" | "weekly";
 
 export function normalizeRepeat(raw: unknown): ScheduleRepeat | undefined {
   const s = String(raw ?? "")
@@ -188,6 +188,16 @@ export function normalizeRepeat(raw: unknown): ScheduleRepeat | undefined {
     s === "freqyearly"
   ) {
     return "yearly";
+  }
+  if (
+    s === "weekly" ||
+    s === "everyweek" ||
+    s === "eachweek" ||
+    s === "week" ||
+    s === "rrulefreqweekly" ||
+    s === "freqweekly"
+  ) {
+    return "weekly";
   }
   return undefined;
 }
@@ -211,7 +221,7 @@ export interface ScheduleEvent {
   category?: ScheduleCategory;
   /** Optional custom glyph on the calendar. Empty → category default. */
   emoji?: string;
-  /** yearly = same month-day every year (birthday, anniversary) */
+  /** yearly = same month-day every year. weekly = same weekday, this month only. */
   repeat?: ScheduleRepeat;
   createdAt: number;
 }
@@ -274,6 +284,10 @@ export function eventEmoji(
 
 export function isYearlyEvent(e: { repeat?: unknown }): boolean {
   return normalizeRepeat(e.repeat) === "yearly";
+}
+
+export function isWeeklyEvent(e: { repeat?: unknown }): boolean {
+  return normalizeRepeat(e.repeat) === "weekly";
 }
 
 /** "14:00" or "14:00–16:00" for UI */
@@ -424,6 +438,135 @@ function yearlyPaintYears(anchorYmd?: string, now = new Date()): number[] {
   const ay = anchorYmd ? parseInt(anchorYmd.slice(0, 4), 10) : NaN;
   if (Number.isFinite(ay) && ay >= 2000 && ay <= 2100) set.add(ay);
   return [...set].sort((a, b) => a - b);
+}
+
+/** UTC midnight day index, or null when `ymd` is not a real calendar date. */
+function ymdToUtcDay(ymd: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (
+    dt.getUTCFullYear() !== y ||
+    dt.getUTCMonth() !== m - 1 ||
+    dt.getUTCDate() !== d
+  ) {
+    return null;
+  }
+  return Math.floor(dt.getTime() / 86_400_000);
+}
+
+function utcDayToYmd(day: number): string {
+  const dt = new Date(day * 86_400_000);
+  const y = dt.getUTCFullYear();
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dt.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** Signed calendar-day distance from `a` to `b` (DST-safe). */
+function daysBetween(a: string, b: string): number | null {
+  const da = ymdToUtcDay(a);
+  const db = ymdToUtcDay(b);
+  if (da == null || db == null) return null;
+  return db - da;
+}
+
+/** Inclusive extra days after the anchor that repeat with a weekly series. */
+function weeklySpanDays(e: Pick<ScheduleEvent, "date" | "endDate">): number {
+  if (!e.endDate || e.endDate <= e.date) return 0;
+  const n = daysBetween(e.date, e.endDate);
+  if (n == null || n < 0) return 0;
+  return n;
+}
+
+/** Same weekday as the series anchor (span days do not count). */
+function sameWeekday(anchor: string, ymd: string): boolean {
+  const delta = daysBetween(anchor, ymd);
+  if (delta == null) return false;
+  return ((delta % 7) + 7) % 7 === 0;
+}
+
+/** YYYY-MM of a calendar date, or "" when it is not one. */
+function yearMonth(ymd: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd.slice(0, 7) : "";
+}
+
+/** First and last YYYY-MM-DD of the anchor's calendar month. */
+function monthBounds(ymd: string): { start: string; end: string } | null {
+  const ym = yearMonth(ymd);
+  if (!ym) return null;
+  const y = parseInt(ym.slice(0, 4), 10);
+  const m = parseInt(ym.slice(5, 7), 10);
+  if (m < 1 || m > 12) return null;
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return {
+    start: `${ym}-01`,
+    end: `${ym}-${String(last).padStart(2, "0")}`,
+  };
+}
+
+/**
+ * Where a weekly plan lands: the same weekday inside the anchor month only
+ * (plus a multi-day span, clipped to that month). Not later or earlier months.
+ */
+function weeklyPaintDates(
+  e: Pick<ScheduleEvent, "date" | "endDate">
+): string[] {
+  const anchorDay = ymdToUtcDay(e.date);
+  const bounds = monthBounds(e.date);
+  if (anchorDay == null || !bounds) return [];
+  const span = weeklySpanDays(e);
+  const winStart = ymdToUtcDay(bounds.start);
+  const winEnd = ymdToUtcDay(bounds.end);
+  if (winStart == null || winEnd == null) return [e.date];
+  if (span >= 6) {
+    const out: string[] = [];
+    for (let day = winStart; day <= winEnd; day++) out.push(utcDayToYmd(day));
+    return out;
+  }
+  const earliest = winStart - span;
+  let k = Math.ceil((earliest - anchorDay) / 7);
+  const out: string[] = [];
+  // A month holds at most six of one weekday.
+  for (let i = 0; i < 8; i++) {
+    const startDay = anchorDay + 7 * k;
+    if (startDay > winEnd) break;
+    for (let s = 0; s <= span; s++) {
+      const day = startDay + s;
+      if (day >= winStart && day <= winEnd) out.push(utcDayToYmd(day));
+    }
+    k++;
+  }
+  return out;
+}
+
+/** Next (or still-current, within 5 minutes) weekly occurrence from `now`. */
+export function upcomingWeeklyOccurrence(
+  e: ScheduleEvent,
+  now = new Date()
+): { date: string; start: Date } | null {
+  if (!isWeeklyEvent(e)) return null;
+  const anchorDay = ymdToUtcDay(e.date);
+  const bounds = monthBounds(e.date);
+  if (anchorDay == null || !bounds) return null;
+  const winStart = ymdToUtcDay(bounds.start);
+  const winEnd = ymdToUtcDay(bounds.end);
+  if (winStart == null || winEnd == null) return null;
+  let k = Math.ceil((winStart - anchorDay) / 7);
+  for (let i = 0; i < 8; i++) {
+    const startDay = anchorDay + 7 * k;
+    if (startDay > winEnd) return null;
+    if (startDay >= winStart) {
+      const ymd = utcDayToYmd(startDay);
+      const start = eventStartOnYmd(e, ymd);
+      if (start && now.getTime() <= start.getTime() + 5 * 60_000) {
+        return { date: ymd, start };
+      }
+    }
+    k++;
+  }
+  return null;
 }
 
 /** Normalize to "HH:mm" or undefined */
@@ -875,11 +1018,11 @@ export async function flushScheduleToDisk(): Promise<ScheduleEvent[]> {
  * Ensure default holidays / NJ days exist, then persist if anything was added.
  */
 function withDefaults(list: ScheduleEvent[]): ScheduleEvent[] {
-  const { events, added } = mergeDefaultCalendarEvents(list);
+  const { events, added, changed } = mergeDefaultCalendarEvents(list);
   memoryCache = events;
   writeLocalStorage(events);
-  // Only persist when defaults were newly seeded AND we have real rows
-  if (added > 0 && events.length > 0) {
+  // Persist new seeds and cleanup of broken duplicate holidays.
+  if ((added > 0 || changed) && events.length > 0) {
     void invokeSaveToDisk(events).catch(() => undefined);
   }
   return events;
@@ -1251,7 +1394,7 @@ export interface DueReminder {
   /** human message for care bubble */
   message: string;
   emoji: string;
-  /** Id used to mark this occurrence+slot reminded (yearly = id:YYYY-MM-DD:slot) */
+  /** Id used to mark this occurrence+slot reminded (repeat = id:YYYY-MM-DD:slot) */
   reminderId: string;
 }
 
@@ -1304,6 +1447,11 @@ export function getDueReminders(
     let occKey = e.id;
     if (isYearlyEvent(e)) {
       const occ = upcomingYearlyOccurrence(e, now);
+      if (!occ) continue;
+      start = occ.start;
+      occKey = `${e.id}:${occ.date}`;
+    } else if (isWeeklyEvent(e)) {
+      const occ = upcomingWeeklyOccurrence(e, now);
       if (!occ) continue;
       start = occ.start;
       occKey = `${e.id}:${occ.date}`;
@@ -1374,6 +1522,11 @@ export function careScheduleTitles(
       if (!occ) continue;
       start = occ.start;
       occDate = occ.date;
+    } else if (isWeeklyEvent(e)) {
+      const occ = upcomingWeeklyOccurrence(e, now);
+      if (!occ) continue;
+      start = occ.start;
+      occDate = occ.date;
     } else {
       start = eventStartDate(e);
     }
@@ -1399,7 +1552,10 @@ export function matchesScheduleCancel(
   const sameDay =
     existing.date === cancel.date ||
     (isYearlyEvent(existing) &&
-      monthDay(existing.date) === monthDay(cancel.date));
+      monthDay(existing.date) === monthDay(cancel.date)) ||
+    (isWeeklyEvent(existing) &&
+      yearMonth(existing.date) === yearMonth(cancel.date) &&
+      sameWeekday(existing.date, cancel.date));
   if (!sameDay) return false;
   const a = existing.title.toLowerCase().trim();
   const b = cancel.title.toLowerCase().trim();
@@ -1418,12 +1574,16 @@ export function matchesScheduleCancel(
  */
 export function matchesScheduleUpsert(
   existing: ScheduleEvent,
-  incoming: Pick<ScheduleEvent, "date" | "title" | "time">
+  incoming: Pick<ScheduleEvent, "date" | "title" | "time" | "repeat">
 ): boolean {
   const sameDay =
     existing.date === incoming.date ||
     (isYearlyEvent(existing) &&
-      monthDay(existing.date) === monthDay(incoming.date));
+      monthDay(existing.date) === monthDay(incoming.date)) ||
+    (isWeeklyEvent(existing) &&
+      isWeeklyEvent(incoming) &&
+      yearMonth(existing.date) === yearMonth(incoming.date) &&
+      sameWeekday(existing.date, incoming.date));
   if (!sameDay) return false;
   const a = existing.title.toLowerCase().trim();
   const b = incoming.title.toLowerCase().trim();
@@ -1489,6 +1649,7 @@ export function applyScheduleUpserts(
         date: e.date,
         title: e.title,
         time: e.time,
+        repeat: e.repeat,
       })
     );
     if (idx >= 0) {
@@ -1523,6 +1684,7 @@ export function applyScheduleUpserts(
       };
       const changed =
         eventCategory(merged) !== eventCategory(prev) ||
+        merged.date !== prev.date ||
         (merged.time || "") !== (prev.time || "") ||
         (merged.endTime || "") !== (prev.endTime || "") ||
         (merged.note || "") !== (prev.note || "") ||
@@ -1580,6 +1742,40 @@ export function addYearlyEvent(
     category: input.category ?? "event",
     emoji: input.emoji,
     repeat: "yearly",
+  };
+  return applyScheduleUpserts(schedule, [draft]);
+}
+
+/**
+ * Add a plan that repeats every week on the same weekday, inside that month.
+ *
+ * Stores one series row (`repeat: "weekly"`) — the calendar expands it
+ * through the anchor month only. Same title + weekday in that month updates
+ * the existing series.
+ */
+export function addWeeklyEvent(
+  schedule: ScheduleEvent[],
+  input: {
+    date: string;
+    title: string;
+    time?: string;
+    endTime?: string;
+    endDate?: string;
+    note?: string;
+    category?: ScheduleCategory;
+    emoji?: string;
+  }
+): { next: ScheduleEvent[]; added: ScheduleEvent[]; updated: ScheduleEvent[] } {
+  const draft: Omit<ScheduleEvent, "id" | "createdAt"> = {
+    date: input.date,
+    title: input.title.trim(),
+    time: input.time,
+    endTime: input.endTime,
+    endDate: input.endDate,
+    note: input.note,
+    category: input.category ?? "event",
+    emoji: input.emoji,
+    repeat: "weekly",
   };
   return applyScheduleUpserts(schedule, [draft]);
 }
@@ -1955,6 +2151,12 @@ export function resolveScheduleEventsFromChat(
     return modelEvents.map((e) => ({
       ...e,
       repeat: e.repeat || "yearly",
+    }));
+  }
+  if (looksLikeWeekly(userText)) {
+    return modelEvents.map((e) => ({
+      ...e,
+      repeat: e.repeat || "weekly",
     }));
   }
   return modelEvents;
@@ -2420,10 +2622,10 @@ export function fallbackEventsFromUserRequest(
         " "
       )
       .replace(
-        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|next|nest|this|every year|each year|annually|yearly)\b/gi,
+        /\b(today|tonight|tomorrow|tmr|tmrw|tmrw\.|tmr\.|next|nest|this|every year|each year|annually|yearly|every week|each week|weekly)\b/gi,
         " "
       )
-      .replace(/每年|年年|每一年|每年今日/g, " ")
+      .replace(/每年|年年|每一年|每年今日|每週|每周|每個星期|每个星期|每星期|每個禮拜|每个礼拜/g, " ")
       .replace(
         /\b(sun(?:day)?|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?)\b/gi,
         " "
@@ -2463,12 +2665,15 @@ export function fallbackEventsFromUserRequest(
 
   const category = inferScheduleCategory(title);
   const yearly = looksLikeYearly(userText);
+  const weekly = !yearly && looksLikeWeekly(userText);
   const note =
     endDate && endDate !== date
       ? `Until ${endDate}`
       : yearly
         ? "Every year"
-        : undefined;
+        : weekly
+          ? "Every week this month"
+          : undefined;
   return [
     {
       date,
@@ -2477,7 +2682,7 @@ export function fallbackEventsFromUserRequest(
       time,
       note,
       category,
-      repeat: yearly ? "yearly" : undefined,
+      repeat: yearly ? "yearly" : weekly ? "weekly" : undefined,
     },
   ];
 }
@@ -2491,6 +2696,16 @@ export function looksLikeYearly(text: string): boolean {
     return true;
   }
   if (/(每年|年年|每一年|每年今日|每年的)/.test(text)) return true;
+  return false;
+}
+
+/** User asked for a weekly / every-week plan. */
+export function looksLikeWeekly(text: string): boolean {
+  const t = text.toLowerCase();
+  if (/\b(every\s+week|each\s+week|weekly)\b/.test(t)) return true;
+  if (/(每週|每周|每個星期|每个星期|每星期|每個禮拜|每个礼拜|每一週|每一周)/.test(text)) {
+    return true;
+  }
   return false;
 }
 
@@ -2522,8 +2737,12 @@ export function formatMarkedSummary(
       const tr = formatTimeRangeWithDuration(e.time, e.endTime);
       const days = eventDayCount(e.date, e.endDate);
       const dayBit = days > 1 ? ` · ${days} days` : "";
-      const yearlyBit = isYearlyEvent(e) ? " · every year" : "";
-      return `${tr ? tr + " " : ""}${e.title} (${range}${dayBit}${yearlyBit} · ${tag})`;
+      const repeatBit = isYearlyEvent(e)
+        ? " · every year"
+        : isWeeklyEvent(e)
+          ? " · every week this month"
+          : "";
+      return `${tr ? tr + " " : ""}${e.title} (${range}${dayBit}${repeatBit} · ${tag})`;
     } catch {
       return e.title;
     }
@@ -2622,9 +2841,28 @@ export function eventTouchesDate(e: ScheduleEvent, date: string): boolean {
     if (!range) return false;
     return range.start <= date && date <= range.end;
   }
+  if (isWeeklyEvent(e)) {
+    if (!yearMonth(e.date) || yearMonth(e.date) !== yearMonth(date)) return false;
+    const delta = daysBetween(e.date, date);
+    if (delta == null) return false;
+    const mod = ((delta % 7) + 7) % 7;
+    return mod <= weeklySpanDays(e);
+  }
   if (e.date === date) return true;
   if (e.endDate && e.date <= date && date <= e.endDate) return true;
   return false;
+}
+
+/** Dates to paint for one plan (yearly / weekly expanded, else the span). */
+function paintedDates(e: ScheduleEvent): string[] {
+  if (isYearlyEvent(e)) {
+    return yearlyPaintYears(e.date).flatMap((year) => {
+      const range = yearlyOccurrenceRange(e, year);
+      return range ? eachDateKey(range.start, range.end) : [];
+    });
+  }
+  if (isWeeklyEvent(e)) return weeklyPaintDates(e);
+  return eachDateKey(e.date, e.endDate);
 }
 
 export function eventsOnDate(events: ScheduleEvent[], date: string) {
@@ -2636,15 +2874,7 @@ export function eventsOnDate(events: ScheduleEvent[], date: string) {
 export function datesWithEvents(events: ScheduleEvent[]): Set<string> {
   const set = new Set<string>();
   for (const e of events) {
-    if (isYearlyEvent(e)) {
-      for (const year of yearlyPaintYears(e.date)) {
-        const range = yearlyOccurrenceRange(e, year);
-        if (!range) continue;
-        for (const d of eachDateKey(range.start, range.end)) set.add(d);
-      }
-      continue;
-    }
-    for (const d of eachDateKey(e.date, e.endDate)) set.add(d);
+    for (const d of paintedDates(e)) set.add(d);
   }
   return set;
 }
@@ -2660,12 +2890,7 @@ export function categoriesByDate(
   for (const e of events) {
     if (e.id.startsWith("baa-default:")) continue;
     const cat = eventCategory(e);
-    const days = isYearlyEvent(e)
-      ? yearlyPaintYears(e.date).flatMap((year) => {
-          const range = yearlyOccurrenceRange(e, year);
-          return range ? eachDateKey(range.start, range.end) : [];
-        })
-      : eachDateKey(e.date, e.endDate);
+    const days = paintedDates(e);
     for (const d of days) {
       const list = map.get(d) ?? [];
       if (!list.includes(cat)) list.push(cat);
@@ -2687,12 +2912,7 @@ export function emojisByDate(
   const byDay = new Map<string, ScheduleEvent[]>();
   for (const e of events) {
     if (e.id.startsWith("baa-default:")) continue;
-    const days = isYearlyEvent(e)
-      ? yearlyPaintYears(e.date).flatMap((year) => {
-          const range = yearlyOccurrenceRange(e, year);
-          return range ? eachDateKey(range.start, range.end) : [];
-        })
-      : eachDateKey(e.date, e.endDate);
+    const days = paintedDates(e);
     for (const d of days) {
       const list = byDay.get(d) ?? [];
       list.push(e);
