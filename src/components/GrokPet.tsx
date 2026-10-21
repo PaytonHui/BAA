@@ -40,6 +40,8 @@ interface GrokPetProps {
     yaw: number;
     pitch: number;
   } | null;
+  /** False while the pet is still turning or gesturing. Weather waits for true. */
+  onBodyReady?: (ready: boolean) => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onPointerEnter?: (e: React.PointerEvent) => void;
   onPointerLeave?: (e: React.PointerEvent) => void;

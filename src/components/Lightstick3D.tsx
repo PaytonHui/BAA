@@ -77,6 +77,8 @@ interface Lightstick3DProps {
   weather?: WeatherSnapshot | null;
   /** Caption while previewing weather FX */
   weatherFxLabel?: string | null;
+  /** False while a turn or gesture is still playing. Weather waits for true. */
+  onBodyReady?: (ready: boolean) => void;
   /**
    * Two-finger free-look: user is orbiting the model manually.
    * When active, all idle/orbit/bob animations freeze.
@@ -134,6 +136,7 @@ export function Lightstick3D({
   weather = null,
   weatherFxLabel = null,
   freeLook = null,
+  onBodyReady,
   onContextMenu,
   onPointerEnter,
   onPointerLeave,
@@ -557,6 +560,7 @@ export function Lightstick3D({
               pointerNorm={freeLook?.active ? null : pointerNorm}
               sunHeat={sunHeat}
               onFaceYaw={onFaceYaw}
+              onBodyReady={onBodyReady}
               freeLook={motionQuiet ? null : freeLook}
             />
           </Suspense>
@@ -754,6 +758,48 @@ function weatherPulseMult(now = new Date()) {
   return 1;
 }
 
+/** Shortest signed angle around Y, in (-PI, PI]. */
+function wrapYaw(yaw: number): number {
+  let y = yaw % (Math.PI * 2);
+  if (y > Math.PI) y -= Math.PI * 2;
+  if (y < -Math.PI) y += Math.PI * 2;
+  return y;
+}
+
+/** Close enough to the rest pose that the face reads as toward the camera. */
+const FACING_YAW = 0.12;
+
+/**
+ * Radians still to spin forward (+Y) until rotation.y faces the camera.
+ * The lightstick's showcase spin always increases Y. Finishing that way
+ * completes the turn; reversing or easing out leaves the face sideways.
+ */
+function remainToFaceFront(yaw: number): number {
+  const y = wrapYaw(yaw);
+  if (Math.abs(y) <= FACING_YAW) return 0;
+  return y > 0 ? Math.PI * 2 - y : -y;
+}
+
+/**
+ * Weather must not start while the stick is mid-turn or mid-gesture.
+ * Facing the camera with no timer left means the move has finished.
+ */
+function bodyStillMoving(input: {
+  spinActive: boolean;
+  hoverBlend: number;
+  yaw: number;
+  now: number;
+  until: number[];
+}): boolean {
+  if (input.spinActive) return true;
+  if (input.hoverBlend > 0.02) return true;
+  if (Math.abs(wrapYaw(input.yaw)) > FACING_YAW) return true;
+  for (const end of input.until) {
+    if (input.now < end) return true;
+  }
+  return false;
+}
+
 function ExactLightstick({
   lifeState: _lifeState,
   expression,
@@ -769,6 +815,7 @@ function ExactLightstick({
   pointerNorm = null,
   sunHeat = false,
   onFaceYaw,
+  onBodyReady,
   freeLook = null,
 }: {
   lifeState: PetLifeState;
@@ -782,18 +829,27 @@ function ExactLightstick({
   animCue?: AnimCue;
   /** Member birthday: keep LED on locked color (no rainbow party override) */
   birthdayHold?: boolean;
-  /** Weather owns stage — no party / spin / confetti / idle notice */
+  /**
+   * Weather wants the stage. Don't start a new move.
+   * A turn or gesture already playing finishes first; weather waits outside.
+   */
   motionQuiet?: boolean;
   pointerNorm?: { x: number; y: number } | null;
   /** Strong warm specular — hot weather FX without CSS sun glare */
   sunHeat?: boolean;
   /** Live face yaw (rad) so weather face FX can spin with the model */
   onFaceYaw?: (yawRad: number) => void;
+  /** False while a turn or gesture is still playing. Weather waits for true. */
+  onBodyReady?: (ready: boolean) => void;
   freeLook?: { active: boolean; yaw: number; pitch: number } | null;
 }) {
   void _lifeState;
   const onFaceYawRef = useRef(onFaceYaw);
   onFaceYawRef.current = onFaceYaw;
+  const onBodyReadyRef = useRef(onBodyReady);
+  onBodyReadyRef.current = onBodyReady;
+  /** null forces the next frame to report, including "already facing forward" */
+  const bodyReadySent = useRef<boolean | null>(null);
   const freeLookRef = useRef(freeLook);
   freeLookRef.current = freeLook;
   const root = useRef<THREE.Group>(null);
@@ -829,6 +885,12 @@ function ExactLightstick({
     /** Last peak rad/s while spinning (used for smooth ramp-down) */
     peak: ORBIT_SPIN_SPEED,
   });
+  /**
+   * Weather asked the stick to stop. null = not measured yet.
+   * A number is radians of +Y spin left until the face is toward the camera.
+   */
+  const quietTravel = useRef<number | null>(null);
+  const quietSince = useRef<number | null>(null);
 
   const idle = useRef({
     nextBlinkAt: 2 + Math.random() * 3,
@@ -877,20 +939,10 @@ function ExactLightstick({
     return () => window.clearInterval(id);
   }, []);
 
-  // Weather exclusive: clear any in-flight one-shot motion immediately
+  // Weather is about to take the stage. Report pose again so an idle stick
+  // (already facing forward) still tells the parent it can start.
   useEffect(() => {
-    if (!motionQuiet) return;
-    const a = anim.current;
-    a.tapUntil = 0;
-    a.colorUntil = 0;
-    a.nodUntil = 0;
-    a.happyUntil = 0;
-    a.wakeUntil = 0;
-    a.confettiUntil = 0;
-    a.birthdayUntil = 0;
-    spin.current.active = false;
-    spin.current.progress = 0;
-    idle.current.noticeUntil = 0;
+    bodyReadySent.current = null;
   }, [motionQuiet]);
 
   // Arm one-shot cues
@@ -1380,7 +1432,8 @@ function ExactLightstick({
       idl.nextNoticeAt = t + 16 + Math.random() * 14;
       playNotice();
     }
-    const noticing = !motionQuiet && t < idl.noticeUntil;
+    // Finish a wiggle that already started. Weather does not cut it off.
+    const noticing = t < idl.noticeUntil;
 
     // —— Rare confetti pulse (time-based) — never during weather / other motion ——
     if (
@@ -1405,19 +1458,73 @@ function ExactLightstick({
     }
 
     // —— Birthday party motion owns yaw while active ——
-    const celebrating =
-      !motionQuiet && t < a.birthdayUntil && a.birthdayUntil > 0;
+    // Keep playing if weather arrived mid-party. The parent holds weather until this ends.
+    const celebrating = t < a.birthdayUntil && a.birthdayUntil > 0;
 
     // —— Hover / showcase spin ——
     // Rest pose: rotation.y = 0 so eyes (+Z on model) face the camera (+Z).
-    // Continuous hover/orbit spin eases in/out so stationary → motion feels silky.
+    // Weather must not ease the spin down halfway. Shades, sweat, and the
+    // snow cap only sit right when that face is toward the camera, so a
+    // turn already playing runs forward until it gets there.
     const hs = hoverSpin.current;
-    if (celebrating || motionQuiet) {
+    const finishScriptedSpin = () => {
+      if (!sp.jingled) {
+        sp.jingled = true;
+        playSpinJingle();
+      }
+      sp.progress += delta / Math.max(0.001, sp.duration);
+      if (sp.progress >= 1) {
+        g.rotation.y = 0;
+        sp.active = false;
+        sp.progress = 0;
+        sp.jingled = false;
+        sp.nextAt = t + 7 + Math.random() * 9;
+      } else {
+        g.rotation.y = sp.baseY + easeInOutCubic(sp.progress) * Math.PI * 2;
+      }
+    };
+    if (celebrating) {
       // Party choreography drives yaw (see compose below)
       hs.speed = 0;
       hs.blend = 0;
       sp.active = false;
+      quietTravel.current = null;
+      quietSince.current = null;
+    } else if (motionQuiet) {
+      if (quietSince.current == null) quietSince.current = t;
+      // A stuck pose must not hold the weather clip forever.
+      if (t - quietSince.current > 7) {
+        sp.active = false;
+        sp.progress = 0;
+        g.rotation.y = 0;
+        hs.blend = 0;
+        hs.speed = 0;
+        quietTravel.current = 0;
+      } else if (sp.active) {
+        hs.blend = 0;
+        hs.speed = 0;
+        quietTravel.current = null;
+        finishScriptedSpin();
+      } else {
+        if (quietTravel.current == null) {
+          quietTravel.current = remainToFaceFront(g.rotation.y);
+        }
+        if (quietTravel.current > 0) {
+          const speed = Math.max(hs.peak || 0, hs.speed || 0, HOVER_SPIN_SPEED);
+          const step = Math.min(quietTravel.current, speed * delta);
+          g.rotation.y += step;
+          quietTravel.current -= step;
+        }
+        if (quietTravel.current <= 0) {
+          g.rotation.y = 0;
+          hs.blend = 0;
+          hs.speed = 0;
+          quietTravel.current = 0;
+        }
+      }
     } else {
+      quietTravel.current = null;
+      quietSince.current = null;
       if (selfSpin) {
         hs.peak = selfSpinFast ? ORBIT_SPIN_SPEED : HOVER_SPIN_SPEED;
       }
@@ -1581,8 +1688,8 @@ function ExactLightstick({
       }
     }
 
-    // Tap bounce: squash then spring up
-    if (!motionQuiet && t < a.tapUntil) {
+    // Tap bounce: squash then spring up. Finish it even if weather is waiting.
+    if (t < a.tapUntil) {
       const u = (t - a.tapT0) / (a.tapUntil - a.tapT0);
       if (u < 0.28) {
         const s = u / 0.28;
@@ -1599,8 +1706,9 @@ function ExactLightstick({
       }
     }
 
-    // Job-done color cycle: bloom + scale pulse (skip during party / weather)
-    const colorCycling = !motionQuiet && !celebrating && t < a.colorUntil;
+    // Job-done color cycle: bloom + scale pulse (skip during party).
+    // An in-flight pulse finishes before weather.
+    const colorCycling = !celebrating && t < a.colorUntil;
     if (colorCycling) {
       const u = (t - a.colorT0) / (a.colorUntil - a.colorT0);
       const wave = Math.sin(u * Math.PI);
@@ -1612,20 +1720,20 @@ function ExactLightstick({
     }
 
     // Chat open nod
-    if (!motionQuiet && !celebrating && t < a.nodUntil) {
+    if (!celebrating && t < a.nodUntil) {
       const u = (t - a.nodT0) / (a.nodUntil - a.nodT0);
       rotX += -0.18 * Math.sin(u * Math.PI);
     }
 
     // Happy wiggle
-    if (!motionQuiet && !celebrating && t < a.happyUntil) {
+    if (!celebrating && t < a.happyUntil) {
       const u = (t - a.happyT0) / (a.happyUntil - a.happyT0);
       rotZ += Math.sin(u * Math.PI * 5) * 0.12 * (1 - u);
       pulseBoost += 0.25 * (1 - u);
     }
 
     // Wake stretch: lean back then upright
-    if (!motionQuiet && !celebrating && t < a.wakeUntil) {
+    if (!celebrating && t < a.wakeUntil) {
       const u = (t - a.wakeT0) / (a.wakeUntil - a.wakeT0);
       if (u < 0.45) {
         rotX += -0.22 * easeInOutCubic(u / 0.45);
@@ -1637,8 +1745,8 @@ function ExactLightstick({
       }
     }
 
-    // Confetti rainbow burst (skipped during birthday / weather)
-    const confettiing = !motionQuiet && !celebrating && t < a.confettiUntil;
+    // Confetti rainbow burst (skipped during birthday). In-flight burst finishes first.
+    const confettiing = !celebrating && t < a.confettiUntil;
     if (confettiing) {
       const u = (t - a.confettiT0) / (a.confettiUntil - a.confettiT0);
       pulseBoost += 0.7 * Math.sin(u * Math.PI);
@@ -1969,6 +2077,32 @@ function ExactLightstick({
     // Keep model group scale synced if used
     if (mg) {
       mg.scale.set(1, 1, 1);
+    }
+
+    // Weather waits until this move is over and the face is toward the camera.
+    const stillMoving = bodyStillMoving({
+      spinActive: sp.active,
+      hoverBlend: hs.blend,
+      yaw: g.rotation.y,
+      now: t,
+      until: [
+        a.tapUntil,
+        a.nodUntil,
+        a.happyUntil,
+        a.wakeUntil,
+        a.colorUntil,
+        a.confettiUntil,
+        a.birthdayUntil,
+        idl.noticeUntil,
+      ],
+    });
+    if (motionQuiet && !stillMoving) {
+      g.rotation.y = 0;
+    }
+    const ready = !motionQuiet || !stillMoving;
+    if (bodyReadySent.current !== ready) {
+      bodyReadySent.current = ready;
+      onBodyReadyRef.current?.(ready);
     }
 
     // Drive face-attached weather (shades/sweat/snow) with spin — every frame

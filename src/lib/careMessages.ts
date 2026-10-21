@@ -583,16 +583,10 @@ export function pickCareLine(opts?: {
   const weather = opts?.weather ?? null;
   const wLines = weather ? weatherCareLines(weather) : [];
 
-  // High priority: weather when forced / strongly relevant
-  if (weather && wLines.length) {
-    const urgent =
-      weatherNeedsUmbrella(weather) ||
-      weatherIsHot(weather) ||
-      weatherIsCold(weather);
-    const p = opts?.preferWeather ? 0.95 : urgent ? 0.28 : 0.08;
-    if (Math.random() < p) {
-      return pickRandom(wLines, opts?.avoidText);
-    }
+  // Weather only when the caller asks (wake, chat, or a cooled-down notable reminder).
+  // A random slice of ordinary care ticks was playing the weather clip too often.
+  if (opts?.preferWeather && wLines.length) {
+    return pickRandom(wLines, opts?.avoidText);
   }
 
   // Calendar mention stays rare

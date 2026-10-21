@@ -79,6 +79,75 @@ export function weatherIsCold(w: WeatherSnapshot): boolean {
   return w.tempC <= 12;
 }
 
+/** Rain, snow, storm, heat, or cold — worth a reminder. Mild clear/cloudy is not. */
+export function weatherIsNotable(w: WeatherSnapshot): boolean {
+  return weatherNeedsUmbrella(w) || weatherIsHot(w) || weatherIsCold(w);
+}
+
+/** Regular weather clip. Also plays sooner when the conditions change. */
+export const WEATHER_FX_PERIOD_MS = 60 * 60 * 1000;
+
+/**
+ * Floor between clips. Wake, the hourly check, and a weather refresh
+ * can otherwise start three animations in the same minute.
+ */
+export const WEATHER_FX_MIN_GAP_MS = 45 * 1000;
+
+const WEATHER_SHOWN_KEY = "baa-weather-fx-at";
+const WEATHER_SHOWN_SIG_KEY = "baa-weather-fx-sig";
+
+/** Kind plus wet/hot/cold/mild. A small temperature wobble is not a change. */
+export function weatherFxSignature(w: WeatherSnapshot): string {
+  const gear = weatherNeedsUmbrella(w)
+    ? "wet"
+    : weatherIsHot(w)
+      ? "hot"
+      : weatherIsCold(w)
+        ? "cold"
+        : "mild";
+  return `${w.kind}:${gear}`;
+}
+
+export function lastWeatherFxAt(): number {
+  try {
+    const n = Number(localStorage.getItem(WEATHER_SHOWN_KEY));
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function lastWeatherFxSignature(): string {
+  try {
+    return localStorage.getItem(WEATHER_SHOWN_SIG_KEY) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function markWeatherFxShown(sig = "", at = Date.now()) {
+  try {
+    localStorage.setItem(WEATHER_SHOWN_KEY, String(at));
+    if (sig) localStorage.setItem(WEATHER_SHOWN_SIG_KEY, sig);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Due on the hour, or when the weather signature changed.
+ * Never due again inside WEATHER_FX_MIN_GAP_MS.
+ */
+export function weatherFxDue(w: WeatherSnapshot | null, now = Date.now()): boolean {
+  const last = lastWeatherFxAt();
+  if (last && now - last < WEATHER_FX_MIN_GAP_MS) return false;
+  if (!last || now - last >= WEATHER_FX_PERIOD_MS) return true;
+  if (!w) return false;
+  const prev = lastWeatherFxSignature();
+  if (!prev) return false;
+  return weatherFxSignature(w) !== prev;
+}
+
 export function loadCachedWeather(): WeatherSnapshot | null {
   try {
     // Drop legacy cache key so wrong IP places from v1 don't stick

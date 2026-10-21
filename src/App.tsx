@@ -98,7 +98,12 @@ import {
 import type { FortuneScores } from "./lib/zodiac";
 import {
   fetchWeather,
+  lastWeatherFxAt,
   loadCachedWeather,
+  markWeatherFxShown,
+  WEATHER_FX_MIN_GAP_MS,
+  weatherFxDue,
+  weatherFxSignature,
   weatherNeedsUmbrella,
   type WeatherSnapshot,
 } from "./lib/weather";
@@ -320,6 +325,17 @@ export default function App() {
   const [weatherFxForced, setWeatherFxForced] = useState(false);
   const weatherFxForceTimerRef = useRef(0);
   const weatherFxForcedRef = useRef(false);
+  /**
+   * Weather was requested, but the stick is still finishing a turn or gesture.
+   * Motion stops accepting new cues now. The rain/sun clip starts after.
+   */
+  const [weatherHold, setWeatherHold] = useState(false);
+  /** True once the current move has finished and the face is toward the camera. */
+  const [bodyReady, setBodyReady] = useState(true);
+  const pendingWeatherStartRef = useRef<(() => void) | null>(null);
+  const weatherHoldFallbackRef = useRef(0);
+  /** True from the moment a clip is requested until it actually starts. */
+  const weatherMomentBusyRef = useRef(false);
   const [pointerNorm, setPointerNorm] = useState<{
     x: number;
     y: number;
@@ -366,11 +382,25 @@ export default function App() {
   /** Stop forced weather FX so birthday can take the stage */
   const clearWeatherFxForce = useCallback(() => {
     window.clearTimeout(weatherFxForceTimerRef.current);
+    window.clearTimeout(weatherHoldFallbackRef.current);
+    pendingWeatherStartRef.current = null;
+    setWeatherHold(false);
     setWeatherFxForced(false);
     weatherFxForcedRef.current = false;
     if (careBubbleRef.current?.kind !== "weather") {
       weatherMotionActiveRef.current = false;
     }
+  }, []);
+
+  /** Pet finished the move it was in. Start a queued weather clip, if any. */
+  const onBodyReady = useCallback((ready: boolean) => {
+    setBodyReady(ready);
+    if (!ready) return;
+    const start = pendingWeatherStartRef.current;
+    if (!start) return;
+    pendingWeatherStartRef.current = null;
+    window.clearTimeout(weatherHoldFallbackRef.current);
+    start();
   }, []);
 
   /**
@@ -892,7 +922,18 @@ export default function App() {
    * Native already showed the window; we only unpause + one expand + FX.
    */
   const playWeatherMoment = useCallback(
-    async (source: "wake" | "chat") => {
+    async (source: "wake" | "chat" | "hour") => {
+      if (weatherMomentBusyRef.current) return;
+      if (source === "hour" && appPausedRef.current) return;
+      if (
+        source === "chat" &&
+        lastWeatherFxAt() &&
+        Date.now() - lastWeatherFxAt() < WEATHER_FX_MIN_GAP_MS
+      ) {
+        return;
+      }
+      weatherMomentBusyRef.current = true;
+      let held = false;
       console.log("[weather-fx] moment", source);
       try {
         if (source === "wake") {
@@ -935,33 +976,58 @@ export default function App() {
           await new Promise<void>((r) => window.setTimeout(r, bdayLeft + 40));
         }
 
-        // Weather anime for exactly WEATHER_FX_MS (8s) — alone on stage
-        setWeatherFxForced(true);
-        weatherFxForcedRef.current = true;
-        weatherMotionActiveRef.current = true;
-        motionBusyUntilRef.current = Date.now() + WEATHER_FX_MS;
-        // Clear leftover one-shots so weather is alone (birthday already finished)
-        setAnimCue(NO_CUE);
-        window.clearTimeout(weatherFxForceTimerRef.current);
-        weatherFxForceTimerRef.current = window.setTimeout(() => {
-          setWeatherFxForced(false);
-          weatherFxForcedRef.current = false;
-          if (careBubbleRef.current?.kind !== "weather") {
-            weatherMotionActiveRef.current = false;
-          }
-        }, WEATHER_FX_MS);
-
-        if (w) {
-          void forceWeatherCareRef.current(w);
+        // Hourly clip, or sooner when the conditions change. Chat skips the hour gate.
+        if (source !== "chat" && !weatherFxDue(w)) {
+          console.log("[weather-fx] skip, not due");
+          return;
         }
+
+        // Hold the stick still-after-this-move, but do not show weather yet.
+        // The 8s clip starts when the pet reports it is facing forward again.
+        weatherMotionActiveRef.current = true;
+        setWeatherHold(true);
+        const beginWeatherShow = () => {
+          setWeatherHold(false);
+          setWeatherFxForced(true);
+          weatherFxForcedRef.current = true;
+          weatherMotionActiveRef.current = true;
+          motionBusyUntilRef.current = Date.now() + WEATHER_FX_MS;
+          setAnimCue(NO_CUE);
+          window.clearTimeout(weatherFxForceTimerRef.current);
+          weatherFxForceTimerRef.current = window.setTimeout(() => {
+            setWeatherFxForced(false);
+            weatherFxForcedRef.current = false;
+            if (careBubbleRef.current?.kind !== "weather") {
+              weatherMotionActiveRef.current = false;
+            }
+          }, WEATHER_FX_MS);
+          markWeatherFxShown(w ? weatherFxSignature(w) : "");
+          weatherMomentBusyRef.current = false;
+          if (w) {
+            void forceWeatherCareRef.current(w);
+          }
+        };
+        held = true;
+        pendingWeatherStartRef.current = beginWeatherShow;
+        window.clearTimeout(weatherHoldFallbackRef.current);
+        // The clip starts from onBodyReady, after the current turn faces forward.
+        // This only releases a hold if that report never arrives.
+        weatherHoldFallbackRef.current = window.setTimeout(() => {
+          const start = pendingWeatherStartRef.current;
+          if (!start) return;
+          pendingWeatherStartRef.current = null;
+          start();
+        }, 12000);
       } catch (e) {
         console.error("[weather-fx] moment failed", e);
+      } finally {
+        if (!held) weatherMomentBusyRef.current = false;
       }
     },
     [ensureBirthdayThen]
   );
 
-  // MacBook lid open / sleep wake / display wake → weather anime every time
+  // Mac wake plays the clip only when it is due (hourly, or the weather changed).
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let lastWake = 0;
@@ -1002,9 +1068,6 @@ export default function App() {
     let hideTimer: number | undefined;
     let waitTimer: number | undefined;
     let remindPoll: number | undefined;
-    let weatherPreferOnce =
-      !!weatherRef.current && weatherNeedsUmbrella(weatherRef.current);
-
     const showBubble = async (
       line: {
         text: string;
@@ -1109,6 +1172,7 @@ export default function App() {
           ? line.kind
           : undefined;
       if (need) markCareNeedShown(need);
+      if (line.kind === "weather") markWeatherFxShown();
 
       if (sound === "reminder") playReminder();
       else playNotice();
@@ -1253,22 +1317,10 @@ export default function App() {
         if (w && !cancelled) setWeather(w);
       }
 
-      // Birthday celebration owns the stick — don't start weather care mid-party
-      const birthdayBusy = Date.now() < birthdayPlayingUntilRef.current;
-      const preferWeather =
-        !birthdayBusy &&
-        weatherPreferOnce &&
-        w &&
-        (weatherNeedsUmbrella(w) ||
-          w.kind === "storm" ||
-          w.kind === "snow");
-      if (preferWeather) weatherPreferOnce = false;
-
       const line = pickCareLine({
         avoidText: careLastTextRef.current,
         scheduleTitles: titles,
         weather: w,
-        preferWeather: !!preferWeather,
       });
 
       // Nothing due yet — wait for the next physio interval (no spam)
@@ -1409,25 +1461,36 @@ export default function App() {
     return () => un?.();
   }, []);
 
-  // Shared weather fetch for care tips (FX runs only when weather care bubble shows)
+  // Hourly weather clip, plus an extra play when the conditions change.
+  // The check is local; the clip itself fetches a fresh snapshot.
+  useEffect(() => {
+    const tick = () => {
+      if (!weatherFxDue(weatherRef.current)) return;
+      void playWeatherMoment("hour");
+    };
+    const id = window.setInterval(tick, 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [playWeatherMoment]);
+
+  // Shared weather fetch for care tips. A new snapshot can start the clip
+  // when the hour is up or the weather signature changed.
   useEffect(() => {
     let cancelled = false;
-    void fetchWeather().then((w) => {
-      if (!cancelled && w) {
-        setWeather(w);
-        console.log("[weather]", w.kind, w.tempC, w.place);
-      }
-    });
+    const apply = (w: WeatherSnapshot | null) => {
+      if (cancelled || !w) return;
+      setWeather(w);
+      console.log("[weather]", w.kind, w.tempC, w.place);
+      if (weatherFxDue(w)) void playWeatherMoment("hour");
+    };
+    void fetchWeather().then(apply);
     const id = window.setInterval(() => {
-      void fetchWeather(true).then((w) => {
-        if (!cancelled && w) setWeather(w);
-      });
+      void fetchWeather(true).then(apply);
     }, 30 * 60 * 1000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [playWeatherMoment]);
 
   // Opening a panel dismisses an idle care bubble. Do NOT also run when a
   // bubble appears while a panel is already open — calendar horoscope is
@@ -2533,12 +2596,22 @@ export default function App() {
   };
 
   const { w: petW, h: petH } = petSizeAt(petScale);
-  /** Weather FX: weather care bubble, or forced moment (Mac wake / chat ask) */
-  const weatherFx =
-    careBubble?.kind === "weather" || weatherFxForced ? weather : null;
-  // Keep motion lock in sync with any weather FX source
-  weatherMotionActiveRef.current =
-    weatherFxForced || careBubble?.kind === "weather";
+  /**
+   * Weather wants the stage (hold while a turn finishes, forced clip, or care).
+   * The visible clip stays off until the pet says the current move is done.
+   */
+  const weatherBusy =
+    weatherHold ||
+    weatherFxForced ||
+    careBubble?.kind === "weather";
+  const [weatherBusyAck, setWeatherBusyAck] = useState(false);
+  if (weatherBusyAck !== weatherBusy) {
+    setWeatherBusyAck(weatherBusy);
+    setBodyReady(!weatherBusy);
+  }
+  const weatherLive =
+    weatherBusy && weatherBusyAck && bodyReady ? weather : null;
+  weatherMotionActiveRef.current = weatherBusy;
   weatherFxForcedRef.current = weatherFxForced;
 
   // Transparent glass around the stick must not block other apps/windows
@@ -2587,31 +2660,32 @@ export default function App() {
               lightColor={effectiveLightColor}
               birthdayHeart={celebrationEmoji}
               selfSpin={
-                !weatherFx && orbit.isOrbitingState && !freeLook.active
+                !weatherBusy && orbit.isOrbitingState && !freeLook.active
               }
               selfSpinFast={
-                !weatherFx && orbit.isOrbitingState && !freeLook.active
+                !weatherBusy && orbit.isOrbitingState && !freeLook.active
               }
               hovering={
-                !weatherFx &&
+                !weatherBusy &&
                 (orbit.isHovering || orbit.isOrbitingState) &&
                 !freeLook.active
               }
               chatOpen={chatOpen}
               loading={loading}
               animCue={
-                freeLook.active || weatherFx ? undefined : animCue
+                freeLook.active || weatherBusy ? undefined : animCue
               }
-              motionQuiet={!!weatherFx}
+              motionQuiet={weatherBusy}
+              onBodyReady={onBodyReady}
               pointerNorm={freeLook.active ? null : pointerNorm}
               dragMotion={
-                freeLook.active || weatherFx
+                freeLook.active || weatherBusy
                   ? { vx: 0, vy: 0, speed: 0, dragging: false }
                   : dragMotion
               }
               scale={petScale}
-              weather={weatherFx}
-              freeLook={weatherFx ? null : freeLook}
+              weather={weatherLive}
+              freeLook={weatherBusy ? null : freeLook}
               onContextMenu={(e) => {
                 e.preventDefault();
                 void openContextMenu();
