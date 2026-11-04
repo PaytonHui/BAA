@@ -39,6 +39,13 @@ import {
 /** Head-only bunny from baa-lightstick-head-only.blend */
 const MODEL_URL = "/models/newjeans-lightstick/head.glb";
 
+/** A percent across the centered head, so bursts rise off the face. */
+function headFxLeft(): number {
+  const left = ((PET_W - PET_HIT_W) / (2 * PET_W)) * 100;
+  const span = (PET_HIT_W / PET_W) * 100;
+  return left + Math.random() * span;
+}
+
 interface Lightstick3DProps {
   expression: PetExpression;
   lifeState: PetLifeState;
@@ -308,7 +315,7 @@ export function Lightstick3D({
       const batch: FloatFx[] = Array.from({ length: 12 }, (_, i) => ({
         id: ++fxId.current,
         emoji: emojis[i % emojis.length],
-        left: 12 + Math.random() * 76,
+        left: headFxLeft(),
         delay: i * 0.05,
         duration: 1.3 + Math.random() * 0.5,
       }));
@@ -326,7 +333,7 @@ export function Lightstick3D({
       const batch: FloatFx[] = Array.from({ length: 6 }, (_, i) => ({
         id: ++fxId.current,
         emoji: i % 2 === 0 ? member || "💗" : "✨",
-        left: 28 + Math.random() * 44,
+        left: headFxLeft(),
         delay: i * 0.07,
         duration: 1.1 + Math.random() * 0.4,
       }));
@@ -341,7 +348,7 @@ export function Lightstick3D({
       const batch: FloatFx[] = Array.from({ length: 10 }, (_, i) => ({
         id: ++fxId.current,
         emoji: emojis[i % emojis.length],
-        left: 16 + Math.random() * 68,
+        left: headFxLeft(),
         delay: i * 0.05,
         duration: 1.15 + Math.random() * 0.45,
       }));
@@ -360,7 +367,7 @@ export function Lightstick3D({
         const batch: FloatFx[] = Array.from({ length: 8 }, (_, i) => ({
           id: ++fxId.current,
           emoji: emojis[i % emojis.length],
-          left: 18 + Math.random() * 64,
+          left: headFxLeft(),
           delay: i * 0.05,
           duration: 1.0 + Math.random() * 0.5,
         }));
@@ -596,7 +603,7 @@ export function Lightstick3D({
             }`}
             style={{
               left: `${p.left}%`,
-              bottom: "46%",
+              bottom: "36%",
               animationDelay: `${p.delay}s`,
               animationDuration: `${p.duration}s`,
             }}

@@ -64,8 +64,10 @@ export function WeatherFx({
   const stormy = kind === "storm";
   const drizzle = kind === "drizzle";
   const foggy = kind === "fog";
+  // A clear or unknown day still gets the sun, so a chat ask is never blank.
+  const sunny = hot || kind === "clear" || kind === "unknown";
 
-  if (!hot && !rainy && !snowy && !cloudy) return null;
+  if (!sunny && !rainy && !snowy && !cloudy) return null;
 
   const dropCount = stormy ? 16 : drizzle ? 7 : 11;
   const hasFaceFx = hot || snowy;
@@ -80,7 +82,7 @@ export function WeatherFx({
       {label && <span className="weather-fx-label">{label}</span>}
 
       {/* —— Sky / world-space (does not spin with the stick) —— */}
-      {hot && (
+      {sunny && (
         <div className="weather-sun" title={`${Math.round(weather.tempC)}°C`}>
           <span className="weather-sun-rays" />
           <span className="weather-sun-core">

@@ -97,10 +97,8 @@ import {
 import type { FortuneScores } from "./lib/zodiac";
 import {
   fetchWeather,
-  lastWeatherFxAt,
   loadCachedWeather,
   markWeatherFxShown,
-  WEATHER_FX_MIN_GAP_MS,
   weatherFxDue,
   weatherFxSignature,
   weatherNeedsUmbrella,
@@ -315,11 +313,11 @@ export default function App() {
   >(() => undefined);
   /** Force a weather care bubble (Mac wake / chat weather ask) */
   const forceWeatherCareRef = useRef<
-    (w: WeatherSnapshot) => void | Promise<void>
+    (w: WeatherSnapshot, duringChat?: boolean) => void | Promise<void>
   >(() => undefined);
   /**
-   * Weather FX without a care bubble (e.g. chat open while asking weather).
-   * Timed show on Mac wake + chat weather questions.
+   * Weather clip. A typed weather question also opens the care bubble
+   * beside the pet, on the side opposite the chat window.
    */
   const [weatherFxForced, setWeatherFxForced] = useState(false);
   const weatherFxForceTimerRef = useRef(0);
@@ -931,13 +929,6 @@ export default function App() {
     async (source: "wake" | "chat" | "hour") => {
       if (weatherMomentBusyRef.current) return;
       if (source === "hour" && appPausedRef.current) return;
-      if (
-        source === "chat" &&
-        lastWeatherFxAt() &&
-        Date.now() - lastWeatherFxAt() < WEATHER_FX_MIN_GAP_MS
-      ) {
-        return;
-      }
       weatherMomentBusyRef.current = true;
       let held = false;
       console.log("[weather-fx] moment", source);
@@ -1010,7 +1001,7 @@ export default function App() {
           markWeatherFxShown(w ? weatherFxSignature(w) : "");
           weatherMomentBusyRef.current = false;
           if (w) {
-            void forceWeatherCareRef.current(w);
+            void forceWeatherCareRef.current(w, source === "chat");
           }
         };
         held = true;
@@ -1083,10 +1074,11 @@ export default function App() {
         scores?: FortuneScores;
       },
       sound: "notice" | "reminder",
-      opts?: { forceWeather?: boolean; force?: boolean }
+      opts?: { forceWeather?: boolean; force?: boolean; duringChat?: boolean }
     ) => {
       // Forced weather moments can replace an idle care bubble, but not while
-      // chat/menu/settings panels own the pet strip.
+      // menu/settings panels own the pet. A weather question typed in chat
+      // still gets the bubble, on the side opposite the chat window.
       if (cancelled || appPausedRef.current) return false;
       if (opts?.force) {
         window.clearTimeout(waitTimer);
@@ -1097,7 +1089,7 @@ export default function App() {
         }
       } else if (opts?.forceWeather) {
         if (
-          chatOpenRef.current ||
+          (!opts.duringChat && chatOpenRef.current) ||
           colorPickerOpenRef.current ||
           calendarOpenRef.current ||
           settingsOpenRef.current ||
@@ -1120,7 +1112,9 @@ export default function App() {
       }
 
       try {
-        if (opts?.force && calendarOpenRef.current) {
+        if (opts?.duringChat && chatOpenRef.current) {
+          careSideRef.current = await pickSideOppositePanel("chat");
+        } else if (opts?.force && calendarOpenRef.current) {
           careSideRef.current = await pickSideOppositePanel("calendar");
         } else if (!careOpenRef.current) {
           await ensureCareStrip();
@@ -1390,7 +1384,7 @@ export default function App() {
       void showBubble(line, "notice", { force: true });
     };
 
-    forceWeatherCareRef.current = async (w: WeatherSnapshot) => {
+    forceWeatherCareRef.current = async (w: WeatherSnapshot, duringChat = false) => {
       if (cancelled || appPausedRef.current) return;
       const lines = weatherCareLines(w);
       if (!lines.length) return;
@@ -1398,7 +1392,7 @@ export default function App() {
       const ok = await showBubble(
         line,
         weatherNeedsUmbrella(w) ? "reminder" : "notice",
-        { forceWeather: true }
+        { forceWeather: true, duringChat }
       );
       if (!ok) {
         // FX still forced by playWeatherMoment even without bubble

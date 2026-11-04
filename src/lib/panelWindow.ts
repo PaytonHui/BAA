@@ -39,6 +39,8 @@ import {
   MENU_PANEL_W,
   PANEL_SHADOW_PAD,
   PET_H,
+  PET_HIT_H,
+  PET_HIT_W,
   PET_W,
   SETTINGS_W,
   pickBubbleSide,
@@ -190,8 +192,8 @@ async function panelSize(
 }
 
 /**
- * Place panel snug to the lightstick silhouette (not the full transparent
- * pet window). Empty glass around the stick used to make panels feel far.
+ * Place a panel beside the head, not the full transparent pet window.
+ * Empty glass around the head used to make panels feel far.
  */
 async function positionNearPet(
   tw: number,
@@ -220,9 +222,11 @@ async function positionNearPet(
   const petColX = winX;
   const petColY = winY;
 
-  // Stick visual footprint (centered in pet column) — tighter than full glass
-  const stickW = Math.max(44, 52 * scale);
-  const stickH = Math.max(140, 168 * scale);
+  // Head footprint, centered. The old 52×168 stick was narrower than this
+  // head, so the care bubble sat on the ears. The tail sticks 6px back
+  // into the 18px shadow pad, so this box plus GAP still clears the face.
+  const stickW = Math.max(44, PET_HIT_W * scale);
+  const stickH = Math.max(44, PET_HIT_H * scale);
   const stickLeft = petColX + (petColW - stickW) / 2;
   const stickTop = petColY + (petColH - stickH) / 2;
   const stickRight = stickLeft + stickW;
@@ -248,12 +252,13 @@ async function positionNearPet(
   type Cand = { x: number; y: number; score: number; side: BubbleSide };
   const cands: Cand[] = [];
 
-  // Tops of most panels line up with the entity. Care sits mid-stick.
-  const topAlignY = winY;
+  // Visible card top lines up with the head, not the empty glass
+  // above it. Care's tail is near the top of its bubble, so that window
+  // starts a little higher and the tail meets the face.
   const placeY =
     kind === "care"
-      ? Math.round(winY + winH * 0.28 - PANEL_SHADOW_PAD)
-      : topAlignY;
+      ? Math.round(stickTop - PANEL_SHADOW_PAD - 28 * scale)
+      : Math.round(stickTop - PANEL_SHADOW_PAD);
 
   const rightX = stickRight + GAP;
   const leftX = stickLeft - tw - GAP;
@@ -277,7 +282,7 @@ async function positionNearPet(
     if (spaceTop >= th + GAP - 2) {
       cands.push({
         x: stickCx - tw / 2,
-        y: winY - th - GAP,
+        y: stickTop - th - GAP,
         score: 50 + spaceTop,
         side: "right",
       });
@@ -285,7 +290,7 @@ async function positionNearPet(
     if (spaceBottom >= th + GAP - 2) {
       cands.push({
         x: stickCx - tw / 2,
-        y: winY + winH + GAP,
+        y: stickBottom + GAP,
         score: 40 + spaceBottom,
         side: "right",
       });

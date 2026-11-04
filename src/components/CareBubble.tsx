@@ -131,7 +131,7 @@ export function CareBubble({
   const posClass =
     layout === "strip"
       ? `care-wa care-wa-strip ${stripSide} relative z-30 w-auto max-w-full text-left cursor-pointer border-0 p-0 bg-transparent`
-      : `care-wa care-wa-${phase} care-wa-right absolute z-30 left-[calc(50%+38px)] top-[30%] w-[156px] text-left cursor-pointer border-0 p-0 bg-transparent`;
+      : `care-wa care-wa-${phase} care-wa-right absolute z-30 left-[calc(50%+58px)] top-[40%] w-[156px] text-left cursor-pointer border-0 p-0 bg-transparent`;
 
   return (
     <button
