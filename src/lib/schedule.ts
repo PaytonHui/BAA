@@ -2790,6 +2790,39 @@ export function formatCancelledSummary(events: ScheduleEvent[]): string {
   return `🗑️ Removed from calendar: ${parts.join(" · ")}`;
 }
 
+/** Today plus the following days, skipping empty days. */
+export function formatNextDaysSchedule(
+  events: ScheduleEvent[],
+  today: string,
+  days = 5
+): string {
+  const lines: string[] = [];
+  for (let i = 0; i < days; i++) {
+    const key = addDaysYmd(today, i);
+    const dayEvents = events
+      .filter((e) => eventTouchesDate(e, key))
+      .sort(
+        (a, b) =>
+          (a.time || "99:99").localeCompare(b.time || "99:99") ||
+          a.title.localeCompare(b.title)
+      );
+    if (!dayEvents.length) continue;
+    const [y, m, d] = key.split("-").map(Number);
+    const label = new Date(y, m - 1, d).toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    const bits = dayEvents.map((e) => {
+      const tr = formatTimeRangeWithDuration(e.time, e.endTime);
+      return `${tr ? `${tr} ` : ""}${e.title}`;
+    });
+    lines.push(`${label}: ${bits.join("; ")}`);
+  }
+  if (!lines.length) return "Next 5 days: nothing on the calendar.";
+  return `Next 5 days:\n${lines.join("\n")}`;
+}
+
 /** Inclusive range of YYYY-MM-DD keys from start → end (caps long spans). */
 export function eachDateKey(start: string, end?: string): string[] {
   if (!end || end <= start) return [start];

@@ -28,10 +28,16 @@ import {
 import type { WeatherSnapshot } from "../lib/weather";
 import { weatherIsHot } from "../lib/weather";
 import { WeatherFx } from "./WeatherFx";
-import { PET_H, PET_W } from "../lib/windowLayout";
+import {
+  HEAD_SCREEN_SCALE,
+  PET_H,
+  PET_HIT_H,
+  PET_HIT_W,
+  PET_W,
+} from "../lib/windowLayout";
 
-/** Exact model from Documents/Certificate (New Jeans Light Stick.gltf) */
-const MODEL_URL = "/models/newjeans-lightstick/lightstick.gltf";
+/** Head-only bunny from baa-lightstick-head-only.blend */
+const MODEL_URL = "/models/newjeans-lightstick/head.glb";
 
 interface Lightstick3DProps {
   expression: PetExpression;
@@ -114,7 +120,7 @@ interface FloatFx {
 }
 
 /**
- * Desktop pet = exact NewJeans lightstick GLTF + full personality animations.
+ * Desktop pet = head-only NewJeans lightstick + personality animations.
  */
 export function Lightstick3D({
   expression,
@@ -158,10 +164,10 @@ export function Lightstick3D({
   const boxH = stageSize?.h
     ? Math.max(1, Math.round(stageSize.h))
     : Math.round(PET_H * s);
-  // Tight stick silhouette only — keep small so empty glass can click-through
-  // Hit target stays pet-sized even in a large party window
-  const hitW = Math.round(42 * s);
-  const hitH = Math.round(150 * s);
+  // Head silhouette only — keep to the mesh so empty glass can click-through.
+  // Hit target stays pet-sized even in a large party window.
+  const hitW = Math.round(PET_HIT_W * s);
+  const hitH = Math.round(PET_HIT_H * s);
   /** Cap retina DPR at 2.5 — was hard-locked to 1 (soft / low-res look) */
   const renderDpr = useMemo(() => {
     if (typeof window === "undefined") return 2;
@@ -199,7 +205,7 @@ export function Lightstick3D({
     if (!el) return;
     // Match model +Z face → screen; hide accessories when looking away
     const facingAmt = Math.cos(yawRad); // 1 = toward camera
-    el.style.transform = `perspective(520px) rotateY(${yawRad}rad)`;
+    el.style.transform = `perspective(520px) rotateY(${yawRad}rad) scale(${HEAD_SCREEN_SCALE})`;
     // Don't fight the leave fade — only set opacity while fully active
     if (!el.dataset.leaving) {
       el.style.opacity = String(Math.max(0, Math.min(1, facingAmt * 1.15)));
@@ -411,7 +417,7 @@ export function Lightstick3D({
         {clusters.map((cl) => (
           <div
             key={cl.id}
-            className="star-cluster-fade absolute left-1/2 top-[40%]"
+            className="star-cluster-fade absolute left-1/2 top-1/2"
             style={{
               // Offset from head center — close to entity, still under canvas
               transform: `translate(calc(-50% + ${cl.x}px), calc(-50% + ${cl.y}px))`,
@@ -590,7 +596,7 @@ export function Lightstick3D({
             }`}
             style={{
               left: `${p.left}%`,
-              bottom: "38%",
+              bottom: "46%",
               animationDelay: `${p.delay}s`,
               animationDuration: `${p.duration}s`,
             }}
@@ -601,9 +607,8 @@ export function Lightstick3D({
       </div>
 
       {/*
-        Stick-only hit target (narrow + tall ≈ real lightstick).
-        Canvas/window around it is pointer-events: none so empty space
-        does not steal clicks / start drag / open menu.
+        Head-only hit target. Canvas around it is pointer-events: none
+        so empty space does not steal clicks / start drag / open menu.
       */}
       <div
         className="pet-hit absolute z-10 left-1/2 top-[50%] -translate-x-1/2 -translate-y-1/2 cursor-grab active:cursor-grabbing touch-none"
@@ -612,8 +617,7 @@ export function Lightstick3D({
           background: "transparent",
           width: hitW,
           height: hitH,
-          // Bunny head on top, thin shaft below
-          borderRadius: `${Math.round(hitW * 0.48)}px ${Math.round(hitW * 0.48)}px ${Math.round(hitW * 0.22)}px ${Math.round(hitW * 0.22)}px`,
+          borderRadius: `${Math.round(hitW * 0.42)}px`,
         }}
         onContextMenu={onContextMenu}
         onPointerEnter={onPointerEnter}
@@ -1241,12 +1245,25 @@ function ExactLightstick({
       const box = new THREE.Box3().setFromObject(g);
       if (!box.isEmpty()) {
         const center = box.getCenter(new THREE.Vector3());
-        const sphere = box.getBoundingSphere(new THREE.Sphere());
-        const fov = (camera as THREE.PerspectiveCamera).fov;
+        const cam = camera as THREE.PerspectiveCamera;
+        const aspect = size.width / Math.max(size.height, 1);
+        const vHalf = THREE.MathUtils.degToRad(cam.fov / 2);
+        const hHalf = Math.atan(Math.tan(vHalf) * aspect);
+        const halfX = (box.max.x - box.min.x) / 2;
+        const halfY = (box.max.y - box.min.y) / 2;
+        // Fit the head box on both axes. A portrait window used to fit a tall
+        // stick on height alone; the wide head would clip on the sides.
+        const pad = 1.18;
+        // Farther camera = smaller head. HEAD_SCREEN_SCALE is the fraction
+        // of the size that fills this window.
         const dist =
-          (sphere.radius * 1.65) /
-          Math.tan(THREE.MathUtils.degToRad(fov / 2));
-        const z = center.z + Math.max(dist, 3.4);
+          Math.max(
+            (halfY * pad) / Math.tan(vHalf),
+            (halfX * pad) / Math.tan(hHalf),
+            3.4
+          ) / HEAD_SCREEN_SCALE;
+        const z = center.z + dist;
+        cam.aspect = aspect;
         camera.position.set(center.x, center.y, z);
         camera.lookAt(center);
         camera.updateProjectionMatrix();

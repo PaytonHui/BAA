@@ -1076,7 +1076,7 @@ textarea {
 .weather-face-layer {
   position: absolute;
   inset: 0;
-  transform-origin: 50% 40%;
+  transform-origin: 50% 50%;
   transform-style: preserve-3d;
   pointer-events: none;
 }
@@ -1243,12 +1243,12 @@ textarea {
   }
 }
 
-/* —— Apple 🕶️ emoji on lightstick face (hot / bright sunny) ——
-   Eyes ~38–42% from top; emoji center sits a bit above so lenses cover pupils. */
+/* —— Apple 🕶️ emoji on the head (hot / bright sunny) ——
+   Eyes ~57% from top; emoji center sits a bit above so lenses cover pupils. */
 .weather-shades {
   position: absolute;
   left: 50%;
-  top: 28%;
+  top: 45%;
   transform: translateX(-50%);
   z-index: 33;
   line-height: 1;
@@ -1275,13 +1275,13 @@ textarea {
   }
 }
 
-/* —— Sweat on lightstick HEAD (temple), not floating above, not on eyes ——
-   Model head center is ~40% from top (same as star-trail anchor). Eyes sit
-   near horizontal center; temple is to the right, a bit above eye line. */
+/* —— Sweat on the head (temple), not floating above, not on eyes ——
+   Head is centered. Eyes sit near 57% from the top; temple is to the
+   right, a bit above the eye line. */
 .weather-sweat {
   position: absolute;
   left: 61%;
-  top: 30%;
+  top: 48%;
   width: 22px;
   height: 34px;
   overflow: hidden;
@@ -1717,8 +1717,8 @@ textarea {
 .weather-snow-cap {
   position: absolute;
   left: 50%;
-  /* Head crown — sits on dome, not floating above */
-  top: 26%;
+  /* Crown of the head-only model — sits on the dome, not floating above */
+  top: 18%;
   width: 58px;
   height: 32px;
   transform: translateX(-50%);

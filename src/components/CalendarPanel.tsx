@@ -720,7 +720,7 @@ export function CalendarPanel({
                   </span>
                 ) : dayMark?.kind === "emoji" ? (
                   <span
-                    className={`leading-none ${large ? "text-[15px]" : "text-[12px]"}`}
+                    className={`baa-plan-emoji leading-none ${large ? "text-[15px]" : "text-[12px]"}`}
                     aria-label={`Day ${day}, ${dayMark.label}`}
                   >
                     {dayMark.value}

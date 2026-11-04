@@ -566,6 +566,48 @@ export async function fetchWeather(force = false): Promise<WeatherSnapshot | nul
   }
 }
 
+const CHAT_WEATHER_ALERT_KEY = "baa-chat-weather-alert";
+
+/** Rain (or likely rain) and hot clear sun are the only chat reminders. */
+export function chatWeatherAlert(w: WeatherSnapshot): "rain" | "hot-sun" | null {
+  if (
+    w.kind === "rain" ||
+    w.kind === "drizzle" ||
+    w.kind === "storm" ||
+    w.kind === "snow" ||
+    (w.precipProb ?? 0) >= 60
+  ) {
+    return "rain";
+  }
+  if (weatherIsHot(w) && w.kind === "clear") return "hot-sun";
+  return null;
+}
+
+/**
+ * One short line when rain or hot sun has just started.
+ * Records the current condition so the same spell is not repeated.
+ */
+export function takeChatWeatherReminder(w: WeatherSnapshot): string | null {
+  const next = chatWeatherAlert(w) ?? "none";
+  let prev = "none";
+  try {
+    prev = localStorage.getItem(CHAT_WEATHER_ALERT_KEY) || "none";
+  } catch {
+    /* private mode */
+  }
+  try {
+    localStorage.setItem(CHAT_WEATHER_ALERT_KEY, next);
+  } catch {
+    /* quota */
+  }
+  if (next === "none" || next === prev) return null;
+  const temp = Math.round(w.tempC);
+  if (next === "rain") {
+    return `Rain’s on the way (${temp}°C). Bring an umbrella.`;
+  }
+  return `Hot sun today (${temp}°C). Drink some water.`;
+}
+
 /** Block injected into chat so on-device AI can answer without fetching. */
 export function weatherHintForChat(w: WeatherSnapshot): string {
   const summary = weatherSummary(w);

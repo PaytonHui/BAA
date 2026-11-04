@@ -4,9 +4,21 @@ import {
 } from "@tauri-apps/api/window";
 import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 
-/** Pet-only window at scale 1 (lightstick stays here visually) */
+/** Pet-only window at scale 1 (head stays here visually) */
 export const PET_W = 220;
 export const PET_H = 324;
+/**
+ * On-screen head size versus the window-filling fit.
+ * 1 would fill the pet window. 1/2 is about 100×87 px: big enough
+ * to see the face and click, with space around it.
+ */
+export const HEAD_SCREEN_SCALE = 1 / 2;
+/**
+ * Head hit target at scale 1, centered in the pet window.
+ * 200×174 is the window-filling head; this is that box times HEAD_SCREEN_SCALE.
+ */
+export const PET_HIT_W = Math.round(200 * HEAD_SCREEN_SCALE);
+export const PET_HIT_H = Math.round(174 * HEAD_SCREEN_SCALE);
 
 /** Logical size at a given zoom scale */
 export function petSizeAt(scale: number): { w: number; h: number } {

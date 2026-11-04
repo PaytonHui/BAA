@@ -3,6 +3,7 @@ import {
   cursorPosition,
   getCurrentWindow,
 } from "@tauri-apps/api/window";
+import { PET_HIT_H, PET_HIT_W } from "../lib/windowLayout";
 
 /**
  * Pass mouse clicks through the transparent pet window except over the stick
@@ -59,21 +60,34 @@ export function usePetClickThrough(opts: {
           const lx = (cursor.x - pos.x) / scale;
           const ly = (cursor.y - pos.y) / scale;
 
-          const s = Math.min(1.85, Math.max(0.65, o.petScale || 1));
-          // Match Lightstick3D pet-hit (tight stick silhouette)
-          const hitW = 42 * s;
-          const hitH = 150 * s;
           const careOnLeft = o.careStripOpen && o.careSide === "left";
           const overlap = 52;
           const petLeft = careOnLeft ? Math.max(0, o.carePanelW - overlap) : 0;
-          const hitLeft = petLeft + (o.petW - hitW) / 2;
-          const hitTop = (o.petH - hitH) / 2;
 
-          let over =
-            lx >= hitLeft &&
-            lx <= hitLeft + hitW &&
-            ly >= hitTop &&
-            ly <= hitTop + hitH;
+          // The visible head is the .pet-hit box. Measuring it keeps the
+          // click-through hole on the face even when the stage is a different
+          // size than the window (a computed center would miss the face).
+          const hitEl = document.querySelector(".pet-hit");
+          const hitBox = hitEl?.getBoundingClientRect();
+          let over = false;
+          if (hitBox && hitBox.width > 2 && hitBox.height > 2) {
+            over =
+              lx >= hitBox.left &&
+              lx <= hitBox.right &&
+              ly >= hitBox.top &&
+              ly <= hitBox.bottom;
+          } else {
+            const s = Math.min(1.85, Math.max(0.65, o.petScale || 1));
+            const hitW = PET_HIT_W * s;
+            const hitH = PET_HIT_H * s;
+            const hitLeft = petLeft + (o.petW - hitW) / 2;
+            const hitTop = (o.petH - hitH) / 2;
+            over =
+              lx >= hitLeft &&
+              lx <= hitLeft + hitW &&
+              ly >= hitTop &&
+              ly <= hitTop + hitH;
+          }
 
           // Care bubble strip sits beside the pet column
           if (!over && o.careStripOpen && ly >= 0 && ly <= o.petH) {

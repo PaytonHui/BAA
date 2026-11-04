@@ -58,16 +58,16 @@ const HK_HOLIDAYS: Record<number, Array<{ m: number; d: number; title: string }>
     { m: 1, d: 30, title: "Lunar New Year (2nd day) 🧧" },
     { m: 1, d: 31, title: "Lunar New Year (3rd day) 🧧" },
     { m: 4, d: 4, title: "Ching Ming Festival 🌼" },
-    { m: 4, d: 18, title: "Good Friday" },
-    { m: 4, d: 19, title: "Day following Good Friday" },
-    { m: 4, d: 21, title: "Easter Monday" },
+    { m: 4, d: 18, title: "Good Friday ✝️" },
+    { m: 4, d: 19, title: "Day following Good Friday ✝️" },
+    { m: 4, d: 21, title: "Easter Monday 🐣" },
     { m: 5, d: 1, title: "Labour Day 💪" },
     { m: 5, d: 5, title: "Birthday of the Buddha 🪷" },
     { m: 5, d: 31, title: "Tuen Ng Festival 🐉" },
     { m: 7, d: 1, title: "HKSAR Establishment Day 🇭🇰" },
     { m: 10, d: 1, title: "National Day 🇨🇳" },
     { m: 10, d: 7, title: "Day after Mid-Autumn Festival 🌕" },
-    { m: 10, d: 29, title: "Chung Yeung Festival" },
+    { m: 10, d: 29, title: "Chung Yeung Festival 🏔️" },
     { m: 12, d: 25, title: "Christmas Day 🎄" },
     { m: 12, d: 26, title: "Boxing Day 🎁" },
   ],
@@ -76,17 +76,17 @@ const HK_HOLIDAYS: Record<number, Array<{ m: number; d: number; title: string }>
     { m: 2, d: 17, title: "Lunar New Year’s Day 🧧" },
     { m: 2, d: 18, title: "Lunar New Year (2nd day) 🧧" },
     { m: 2, d: 19, title: "Lunar New Year (3rd day) 🧧" },
-    { m: 4, d: 3, title: "Good Friday" },
-    { m: 4, d: 4, title: "Day following Good Friday" },
+    { m: 4, d: 3, title: "Good Friday ✝️" },
+    { m: 4, d: 4, title: "Day following Good Friday ✝️" },
     { m: 4, d: 6, title: "Day following Ching Ming Festival 🌼" },
-    { m: 4, d: 7, title: "Day following Easter Monday" },
+    { m: 4, d: 7, title: "Day following Easter Monday 🐣" },
     { m: 5, d: 1, title: "Labour Day 💪" },
     { m: 5, d: 25, title: "Day following Birthday of the Buddha 🪷" },
     { m: 6, d: 19, title: "Tuen Ng Festival 🐉" },
     { m: 7, d: 1, title: "HKSAR Establishment Day 🇭🇰" },
     { m: 9, d: 26, title: "Day after Mid-Autumn Festival 🌕" },
     { m: 10, d: 1, title: "National Day 🇨🇳" },
-    { m: 10, d: 19, title: "Day following Chung Yeung Festival" },
+    { m: 10, d: 19, title: "Day following Chung Yeung Festival 🏔️" },
     { m: 12, d: 25, title: "Christmas Day 🎄" },
     { m: 12, d: 26, title: "Boxing Day 🎁" },
   ],
@@ -95,9 +95,9 @@ const HK_HOLIDAYS: Record<number, Array<{ m: number; d: number; title: string }>
     { m: 2, d: 6, title: "Lunar New Year’s Day 🧧" },
     { m: 2, d: 8, title: "Lunar New Year (3rd day) 🧧" },
     { m: 2, d: 9, title: "Lunar New Year (4th day) 🧧" },
-    { m: 3, d: 26, title: "Good Friday" },
-    { m: 3, d: 27, title: "Day following Good Friday" },
-    { m: 3, d: 29, title: "Easter Monday" },
+    { m: 3, d: 26, title: "Good Friday ✝️" },
+    { m: 3, d: 27, title: "Day following Good Friday ✝️" },
+    { m: 3, d: 29, title: "Easter Monday 🐣" },
     { m: 4, d: 5, title: "Ching Ming Festival 🌼" },
     { m: 5, d: 1, title: "Labour Day 💪" },
     { m: 5, d: 13, title: "Birthday of the Buddha 🪷" },
@@ -105,7 +105,7 @@ const HK_HOLIDAYS: Record<number, Array<{ m: number; d: number; title: string }>
     { m: 7, d: 1, title: "HKSAR Establishment Day 🇭🇰" },
     { m: 9, d: 16, title: "Day after Mid-Autumn Festival 🌕" },
     { m: 10, d: 1, title: "National Day 🇨🇳" },
-    { m: 10, d: 8, title: "Chung Yeung Festival" },
+    { m: 10, d: 8, title: "Chung Yeung Festival 🏔️" },
     { m: 12, d: 25, title: "Christmas Day 🎄" },
     { m: 12, d: 27, title: "First weekday after Christmas 🎁" },
   ],
@@ -569,14 +569,53 @@ export function isNewJeansDebutDay(monthIndex: number, day: number): boolean {
 }
 
 /**
- * Calendar grid mark for a day.
+ * Calendar grid mark for a day. The glyph replaces the date number.
  * - Member birthday → single color heart emoji
  * - Debut Day (7/22) → five-color NJ gradient heart (rendered in CSS)
  * - User birthday → bunny
+ * - Holiday / special day → the emoji at the end of its title (🎄, 🌕, …)
  */
 export type CalendarDayMark =
   | { kind: "emoji"; value: string; label: string }
   | { kind: "nj-debut-heart"; label: string };
+
+/** Last emoji in a holiday title, including flags such as 🇭🇰. */
+function glyphAtEnd(title: string): string | null {
+  const chars = [...title.trim()];
+  let i = chars.length - 1;
+  if (i < 0) return null;
+  // Variation selector sits after the symbol (✝️, 🏔️) and is part of the glyph.
+  if (chars[i] === "\uFE0F" && i > 0) i -= 1;
+  const cp = chars[i].codePointAt(0) ?? 0;
+  const isFlag = (n: number) => n >= 0x1f1e6 && n <= 0x1f1ff;
+  if (isFlag(cp) && i > 0 && isFlag(chars[i - 1].codePointAt(0) ?? 0)) {
+    return chars[i - 1] + chars[i];
+  }
+  if (/\p{Extended_Pictographic}/u.test(chars[i])) {
+    return chars[i] + (chars[i + 1] === "\uFE0F" ? "\uFE0F" : "");
+  }
+  return null;
+}
+
+/** HK general holiday, fixed special, or Mother’s / Father’s Day on this date. */
+function holidayTitle(
+  year: number,
+  monthIndex: number,
+  day: number
+): string | null {
+  const m = monthIndex + 1;
+  const hk = HK_HOLIDAYS[year]?.find((h) => h.m === m && h.d === day);
+  if (hk) return hk.title;
+  const fixed = FIXED_SPECIALS.find((s) => s.m === m && s.d === day);
+  if (fixed) return fixed.title;
+  if (nthWeekdayOfMonth(year, 5, 0, 2) === ymd(year, m, day)) {
+    return "Mother’s Day 💐";
+  }
+  if (nthWeekdayOfMonth(year, 6, 0, 3) === ymd(year, m, day)) {
+    return "Father’s Day 👔";
+  }
+  return null;
+}
 
 /** True for gazetted Hong Kong general holidays (red date numbers). */
 export function isHongKongGeneralHoliday(
@@ -607,9 +646,20 @@ export function calendarDayMark(
     };
   }
   const p = profile ?? loadUserProfile();
-  if (p.birthdayMonth == null || p.birthdayDay == null) return null;
-  if (monthIndex + 1 !== p.birthdayMonth || day !== p.birthdayDay) return null;
-  return { kind: "emoji", value: USER_BUNNY, label: "Your birthday" };
+  if (
+    p.birthdayMonth != null &&
+    p.birthdayDay != null &&
+    monthIndex + 1 === p.birthdayMonth &&
+    day === p.birthdayDay
+  ) {
+    return { kind: "emoji", value: USER_BUNNY, label: "Your birthday" };
+  }
+  const title = holidayTitle(year, monthIndex, day);
+  const glyph = title ? glyphAtEnd(title) : null;
+  if (title && glyph) {
+    return { kind: "emoji", value: glyph, label: title };
+  }
+  return null;
 }
 
 /**

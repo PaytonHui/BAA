@@ -54,7 +54,6 @@ import {
 } from "./lib/schedule";
 import {
   CARE_PANEL_W,
-  collapseToPet,
   petSizeAt,
   pickBubbleSide,
   resizePetScale,
@@ -686,17 +685,24 @@ export default function App() {
         setPanelDock("top");
         void hideAllPanelWindows();
         fireAnim("wake");
-        // Rust floats the OS window; ease 3D zoom in lockstep so the stick
-        // stays fully visible while it drifts home (no teleport flash).
+        // Rust starts a float to the unscaled 220×324. Retarget it to the
+        // saved size so the stage and the window stay the same rectangle.
+        // A mismatch parks the head in a corner and clicks pass through it.
+        const home = loadHomeScale();
+        const { w, h } = petSizeAt(home);
+        void invoke("float_to_center_sized", { width: w, height: h }).catch(
+          () => undefined
+        );
         animatePetScaleHome(petScaleRef, setPetScale, () => setHomeHere());
         return;
       }
       if (action === "dock-center-done") {
-        // Native float finished — lock scale + home to chosen default
+        // Native float finished — lock scale and window to the chosen size
         const home = loadHomeScale();
         petScaleRef.current = home;
         setPetScale(home);
         savePetScale(home);
+        void resizePetScale(home);
         setHomeHere();
         return;
       }
@@ -1531,17 +1537,22 @@ export default function App() {
         .catch(() => undefined);
     };
 
-    // Recover size + apply saved zoom scale
-    void resizePetScale(petScaleRef.current)
-      .then(() => pin())
-      .catch(() => pin());
+    // Rust setup already floats toward the unscaled 220×324. That leaves a
+    // Large or Small stage hanging out of the window, so the head sits in a
+    // corner and the face is not clickable. Retarget that float to the saved
+    // size. The window and the stage are then the same rectangle.
+    const home = loadHomeScale();
+    petScaleRef.current = home;
+    setPetScale(home);
+    savePetScale(home);
+    const { w, h } = petSizeAt(home);
+    void invoke("float_to_center_sized", { width: w, height: h })
+      .catch(() => resizePetScale(home))
+      .finally(() => pin());
 
     pin();
     const t1 = window.setTimeout(pin, 300);
     const t2 = window.setTimeout(pin, 1200);
-    const t3 = window.setTimeout(() => {
-      void collapseToPet(panelDockRef.current, petScaleRef.current).catch(() => undefined);
-    }, 600);
     const onFocus = () => pin();
     const onVis = () => {
       if (document.visibilityState === "visible") pin();
@@ -1554,7 +1565,6 @@ export default function App() {
     return () => {
       window.clearTimeout(t1);
       window.clearTimeout(t2);
-      window.clearTimeout(t3);
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVis);
     };

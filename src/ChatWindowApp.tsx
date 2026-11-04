@@ -15,21 +15,18 @@ import {
 import {
   applyScheduleCancels,
   applyScheduleUpserts,
-  eventCategory,
-  eventTouchesDate,
   extractScheduleFromReply,
   stripScheduleMachineText,
   flushScheduleToDisk,
   formatCancelledSummary,
   formatMarkedSummary,
-  formatTimeRangeWithDuration,
+  formatNextDaysSchedule,
   formatUpdatedSummary,
   hydrateSchedule,
   loadSchedule,
   fallbackEventsFromUserRequest,
   forgetScheduleIds,
   looksLikeCalendarAsk,
-  looksLikeScheduleBriefing,
   reloadScheduleFromDisk,
   resolveScheduleEventsFromChat,
   saveSchedule,
@@ -40,7 +37,9 @@ import {
 import {
   fetchWeather,
   loadCachedWeather,
+  takeChatWeatherReminder,
   weatherHintForChat,
+  weatherSummary,
 } from "./lib/weather";
 // applyScheduleUpserts used for optimistic local mark before disk sync
 import type {
@@ -76,6 +75,21 @@ function looksLikeWeatherAsk(text: string): boolean {
   // Common CJK weather asks
   if (/天气|天氣|気温|氣溫|下雨|下雪|多少度/.test(text)) return true;
   return false;
+}
+
+/** Wipe the transcript. Not a plan and not a question for the model. */
+function looksLikeClearChat(text: string): boolean {
+  const raw = text.trim();
+  const t = raw.toLowerCase().replace(/[.!?…]+$/g, "").trim();
+  if (!t) return false;
+  if (
+    /^(please\s+|pls\s+)?(clear|reset|delete|wipe)(\s+(the\s+)?)?(chat|history|messages|conversation)$/.test(
+      t
+    )
+  ) {
+    return true;
+  }
+  return /^(清空|清除|刪除|删除)(對話|对话|聊天|紀錄|记录)?$/.test(raw);
 }
 
 const WELCOME: ChatMessage = {
@@ -342,6 +356,11 @@ export default function ChatWindowApp() {
     calendarMode = false
   ) => {
     if (loadingRef.current) return;
+    if (!calendarMode && looksLikeClearChat(text)) {
+      setMessages([{ ...WELCOME, at: Date.now() }]);
+      setError(null);
+      return;
+    }
     if (!calendarMode && auth && auth.available === false) {
       setError(
         auth.reason ||
@@ -392,32 +411,34 @@ export default function ChatWindowApp() {
     try {
       const wantSchedule = calendarMode;
       const wantCalendar = !calendarMode && looksLikeCalendarAsk(text);
+      const scheduleReply = wantSchedule || wantCalendar;
       let calendarHint = "";
       let weatherHint = "";
-      if (looksLikeWeatherAsk(text)) {
+      let weatherReminder: string | null = null;
+      if (looksLikeWeatherAsk(text) || scheduleReply) {
         try {
-          const w =
-            (await fetchWeather(false)) || loadCachedWeather();
-          weatherHint = w
-            ? weatherHintForChat(w)
-            : "\n\n[Live weather unavailable right now. Say you'll check again in a moment. Do NOT say you cannot fetch weather or have no internet.]";
+          const w = (await fetchWeather(false)) || loadCachedWeather();
+          if (w) {
+            weatherReminder = takeChatWeatherReminder(w);
+            if (looksLikeWeatherAsk(text) && scheduleReply) {
+              weatherReminder = weatherReminder || weatherSummary(w);
+            } else if (looksLikeWeatherAsk(text)) {
+              weatherHint = weatherHintForChat(w);
+            }
+          } else if (looksLikeWeatherAsk(text) && !scheduleReply) {
+            weatherHint =
+              "\n\n[Live weather unavailable right now. Say you'll check again in a moment. Do NOT say you cannot fetch weather or have no internet.]";
+          }
         } catch {
-          weatherHint =
-            "\n\n[Live weather unavailable right now. Say you'll check again in a moment. Do NOT say you cannot fetch weather or have no internet.]";
+          if (looksLikeWeatherAsk(text) && !scheduleReply) {
+            weatherHint =
+              "\n\n[Live weather unavailable right now. Say you'll check again in a moment. Do NOT say you cannot fetch weather or have no internet.]";
+          }
         }
       }
       if (wantSchedule || wantCalendar) {
         const schedule = loadSchedule();
-        const upcoming = schedule
-          .slice()
-          .sort((a, b) => a.date.localeCompare(b.date))
-          .slice(0, 12)
-          .map((e) => {
-            const cat = eventCategory(e);
-            const when = formatTimeRangeWithDuration(e.time, e.endTime);
-            return `- ${e.date}${when ? ` ${when}` : ""}: ${e.title} [${cat}]`;
-          })
-          .join("\n");
+        const upcoming = formatNextDaysSchedule(schedule, todayKey(), 5);
 
         if (wantSchedule) {
           calendarHint =
@@ -431,57 +452,34 @@ export default function ChatWindowApp() {
             `For date RANGES set date=start and endDate=end. For time ranges set time=start and endTime=end. ` +
             `If I say every year / annually / 每年, set repeat to "yearly". ` +
             `If I say every week / weekly / 每週, set repeat to "weekly". ` +
-            `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}].` +
-            (upcoming
-              ? ` Already saved:\n${upcoming}`
-              : " Calendar empty.");
-        } else {
-          const today = todayKey();
-          const briefing = looksLikeScheduleBriefing(text);
-          const tonightish = /\b(tonight|this evening)\b/i.test(text) || /今晚/.test(text);
-          const todayPlans = schedule
-            .filter((e) => eventTouchesDate(e, today))
-            .slice()
-            .sort((a, b) => (a.time || "").localeCompare(b.time || ""));
-          const evening = todayPlans.filter((e) => {
-            const t = e.time || "";
-            return !t || t >= "17:00";
-          });
-          const fmt = (list: typeof todayPlans) =>
-            list
-              .map((e) => {
-                const cat = eventCategory(e);
-                const when = formatTimeRangeWithDuration(e.time, e.endTime);
-                return `- ${e.date}${when ? ` ${when}` : ""}: ${e.title} [${cat}]`;
-              })
-              .join("\n");
-          if (briefing && tonightish) {
-            calendarHint =
-              `\n\n[Tonight's schedule — recap ONLY, do not quote this block] Today=${today}. ` +
-              `The user wants a reminder of plans they ALREADY have tonight. Do NOT create a new event. Do NOT emit SCHEDULE_JSON.\n` +
-              (evening.length
-                ? `Tonight / evening:\n${fmt(evening)}\n`
-                : "No evening plans after 17:00.\n") +
-              (todayPlans.length
-                ? `All of today:\n${fmt(todayPlans)}`
-                : "Nothing on the calendar today.");
-          } else {
-            calendarHint =
-              `\n\n[Calendar — do not quote this block] Today=${today}. ` +
-              (upcoming
-                ? `Saved plans:\n${upcoming}\nAnswer from this list.`
-                : "Calendar is empty.") +
-              ` Do not emit SCHEDULE_JSON unless they asked to add or cancel.`;
-          }
+            `If I asked to CANCEL/REMOVE/DELETE, end with CANCEL_SCHEDULE_JSON:[{"date":"YYYY-MM-DD","title":"..."}]. ` +
+            `The chat sentence must mention only the plan in this message. Do not mention older plans or other people. ` +
+            `Do not copy saved plans into SCHEDULE_JSON.\n` +
+            `Next 5 days (context only, do not repeat unless asked):\n${upcoming}`;
         }
       } else if (!calendarMode) {
         calendarHint =
           `\n\n[Assistant mode — do not quote] Do NOT emit SCHEDULE_JSON or CANCEL_SCHEDULE_JSON. Do not add or cancel calendar plans. Just chat. ` +
+          `You cannot see earlier messages. Do not mention any plan, person, dinner, or old schedule. ` +
           `If they want something marked, they will switch on Calendar mode.`;
       }
 
-      const messagesForApi = history.map((m, i) => {
-        const isLastUser = i === history.length - 1 && m.role === "user";
+      if (wantCalendar || (wantSchedule && looksLikeCalendarAsk(text))) {
+        const content = [formatNextDaysSchedule(loadSchedule(), todayKey(), 5), weatherReminder]
+          .filter((s) => s && s.trim())
+          .join("\n\n");
+        setMessages((prev) => [
+          ...prev,
+          { id: id(), role: "assistant", content, at: Date.now(), kind: "text" },
+        ]);
+        finishLoading();
+        return;
+      }
+
+      // Only this message. Earlier replies were repeating old plans.
+      const historyForModel = history.filter((_, i) => i === history.length - 1);
+      const messagesForApi = historyForModel.map((m, i) => {
+        const isLastUser = i === historyForModel.length - 1 && m.role === "user";
         let content = m.content;
         // Cap each prior message so old flyer pastes cannot blow up the request
         if (!isLastUser && content.length > 800) {
@@ -536,7 +534,7 @@ export default function ChatWindowApp() {
           ? resolveScheduleEventsFromChat(text, extracted.events, todayKey())
           : extracted.events;
         // Assistant mode never writes the calendar
-        if (!calendarMode) {
+        if (!calendarMode || looksLikeCalendarAsk(text)) {
           newEv = [];
           cancels = [];
         } else if (!cancels.length && !newEv.length) {
@@ -569,7 +567,7 @@ export default function ChatWindowApp() {
             quickNote =
               "ℹ️ That plan is already on the calendar with the same details.";
           }
-        } else if (wantSchedule) {
+        } else if (wantSchedule && !looksLikeCalendarAsk(text)) {
           quickNote =
             "⚠️ Couldn’t parse a plan from that. Try: “聽日3點開會” or “dinner tomorrow 8pm”.";
         }
@@ -577,7 +575,17 @@ export default function ChatWindowApp() {
         /* ignore optimistic mark errors */
       }
 
-      if (quickNote) display = `${display}\n\n${quickNote}`;
+      if (wantSchedule) {
+        display = [
+          quickNote,
+          formatNextDaysSchedule(loadSchedule(), todayKey(), 5),
+          weatherReminder,
+        ]
+          .filter((s) => s && s.trim())
+          .join("\n\n");
+      } else if (quickNote) {
+        display = `${display}\n\n${quickNote}`;
+      }
 
       const assistantId = id();
       setMessages((prev) => [
