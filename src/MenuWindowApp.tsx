@@ -14,6 +14,7 @@ import {
   useMacWindowClose,
 } from "./components/MacWindowShell";
 import { isMuted, toggleMuted } from "./lib/sounds";
+import { isDark, toggleDark } from "./lib/theme";
 import {
   MENU_PANEL_H,
   MENU_PANEL_H_SUPPORT,
@@ -38,6 +39,7 @@ export type MenuAction =
 
 export default function MenuWindowApp() {
   const [muted, setMuted] = useState(() => isMuted());
+  const [dark, setDark] = useState(() => isDark());
   const [open, setOpen] = useState(true);
   const [showChat] = useState(true);
 
@@ -60,6 +62,7 @@ export default function MenuWindowApp() {
     const unsubs: Array<() => void> = [];
     const onShow = () => {
       setMuted(isMuted());
+      setDark(isDark());
       setOpen(true);
       void refreshAuth();
       void getCurrentWindow()
@@ -92,7 +95,18 @@ export default function MenuWindowApp() {
     }).then((fn) => {
       u = fn;
     });
-    return () => u?.();
+    let themeUn: (() => void) | undefined;
+    void listen<{ dark?: boolean }>("theme-changed", (ev) => {
+      if (typeof ev.payload?.dark === "boolean") {
+        setDark(ev.payload.dark);
+      }
+    }).then((fn) => {
+      themeUn = fn;
+    });
+    return () => {
+      u?.();
+      themeUn?.();
+    };
   }, []);
 
   const close = useMacWindowClose(async () => {
@@ -119,6 +133,7 @@ export default function MenuWindowApp() {
         floating
         open={open}
         muted={muted}
+        dark={dark}
         showChat={showChat}
         onClose={() => void close()}
         onChat={() => void act("chat")}
@@ -128,6 +143,11 @@ export default function MenuWindowApp() {
           const next = toggleMuted();
           setMuted(next);
           void emit("mute-changed", { muted: next }).catch(() => undefined);
+        }}
+        onToggleDark={() => {
+          const next = toggleDark();
+          setDark(next);
+          void emit("theme-changed", { dark: next }).catch(() => undefined);
         }}
         onSettings={() => void act("settings")}
         onSyncCalendar={() => void act("sync")}

@@ -275,6 +275,208 @@ unsafe fn apply_ns(ns_window: *mut std::ffi::c_void) {
     let _: () = msg_send![obj, setHidesOnDeactivate: false];
     // CanJoinAllSpaces windows should not hide when app is inactive
     let _: () = msg_send![obj, setCanHide: false];
+    // Once, on TaoWindow: let the pet's empty top padding cross the menu bar.
+    install_pet_top_reach(obj);
+}
+
+/// `windowLayout.ts`: pet window 220×324, head hit 100×87, centered.
+/// `HEAD_SCREEN_SCALE` is 1/2. Do not change these to match a new scale.
+const PET_WINDOW_H: f64 = 324.0;
+const PET_HIT_H: f64 = 87.0;
+
+/// Cocoa points of transparent window above the centered head.
+fn head_top_pad(window_h: f64) -> f64 {
+    window_h * (PET_WINDOW_H - PET_HIT_H) / (2.0 * PET_WINDOW_H)
+}
+
+/// Highest Cocoa origin.y that still keeps the head on the physical screen.
+/// `screen_top` is `screen.frame` max Y. Higher origin.y is higher on screen.
+fn relaxed_origin_y(proposed_y: f64, clamped_y: f64, height: f64, screen_top: f64) -> f64 {
+    let max_origin_y = screen_top + head_top_pad(height) - height;
+    let mut y = proposed_y;
+    if y > max_origin_y {
+        y = max_origin_y;
+    }
+    // Dock and the bottom edge stay on AppKit's clamp.
+    if y < clamped_y {
+        y = clamped_y;
+    }
+    y
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NsPoint {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NsSize {
+    width: f64,
+    height: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct NsRect {
+    origin: NsPoint,
+    size: NsSize,
+}
+
+unsafe impl objc2::encode::Encode for NsPoint {
+    const ENCODING: objc2::encode::Encoding = objc2::encode::Encoding::Struct(
+        "CGPoint",
+        &[f64::ENCODING, f64::ENCODING],
+    );
+}
+
+unsafe impl objc2::encode::Encode for NsSize {
+    const ENCODING: objc2::encode::Encoding = objc2::encode::Encoding::Struct(
+        "CGSize",
+        &[f64::ENCODING, f64::ENCODING],
+    );
+}
+
+unsafe impl objc2::encode::Encode for NsRect {
+    const ENCODING: objc2::encode::Encoding = objc2::encode::Encoding::Struct(
+        "CGRect",
+        &[NsPoint::ENCODING, NsSize::ENCODING],
+    );
+}
+
+type ConstrainImp = unsafe extern "C-unwind" fn(
+    *mut objc2::runtime::AnyObject,
+    objc2::runtime::Sel,
+    NsRect,
+    *mut objc2::runtime::AnyObject,
+) -> NsRect;
+
+static ORIGINAL_CONSTRAIN: OnceLock<ConstrainImp> = OnceLock::new();
+static TOP_REACH_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C-unwind" fn constrain_baa_frame(
+    this: *mut objc2::runtime::AnyObject,
+    sel: objc2::runtime::Sel,
+    proposed: NsRect,
+    screen: *mut objc2::runtime::AnyObject,
+) -> NsRect {
+    let Some(original) = ORIGINAL_CONSTRAIN.get() else {
+        return proposed;
+    };
+    let clamped = original(this, sel, proposed, screen);
+    if this.is_null() || !title_is_exact_baa(this) {
+        return clamped;
+    }
+
+    let mut screen = screen;
+    if screen.is_null() {
+        screen = objc2::msg_send![this, screen];
+    }
+    if screen.is_null() {
+        return clamped;
+    }
+    let full: NsRect = objc2::msg_send![screen, frame];
+    let mut out = proposed;
+    // Sides stay inside the screen. The top may rise by the head's padding.
+    out.origin.x = clamped.origin.x;
+    out.origin.y = relaxed_origin_y(
+        proposed.origin.y,
+        clamped.origin.y,
+        proposed.size.height,
+        full.origin.y + full.size.height,
+    );
+    out
+}
+
+unsafe fn title_is_exact_baa(win: *mut objc2::runtime::AnyObject) -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let title: *mut AnyObject = msg_send![win, title];
+    if title.is_null() {
+        return false;
+    }
+    let bytes: *const std::ffi::c_char = msg_send![title, UTF8String];
+    if bytes.is_null() {
+        return false;
+    }
+    std::ffi::CStr::from_ptr(bytes).to_bytes() == b"BAA"
+}
+
+/// TaoWindow is shared by every BAA window. Add `constrainFrameRect:toScreen:`
+/// on that class once, and let the hook keep panels on-screen by title.
+unsafe fn install_pet_top_reach(win: *mut objc2::runtime::AnyObject) {
+    use objc2::runtime::{AnyClass, Imp};
+    use objc2::sel;
+
+    if TOP_REACH_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    let cls = (*win).class();
+    let sel = sel!(constrainFrameRect:toScreen:);
+    let Some(method) = cls.instance_method(sel) else {
+        TOP_REACH_INSTALLED.store(false, Ordering::SeqCst);
+        eprintln!("[BAA] top-reach: constrainFrameRect missing");
+        return;
+    };
+    let types = objc2::ffi::method_getTypeEncoding(method);
+    if types.is_null() {
+        TOP_REACH_INSTALLED.store(false, Ordering::SeqCst);
+        eprintln!("[BAA] top-reach: method encoding missing");
+        return;
+    }
+
+    let orig: ConstrainImp = std::mem::transmute(method.implementation());
+    let _ = ORIGINAL_CONSTRAIN.set(orig);
+    let new_imp: Imp = std::mem::transmute(constrain_baa_frame as ConstrainImp);
+    let cls_ptr = cls as *const AnyClass as *mut AnyClass;
+    let added = objc2::ffi::class_addMethod(cls_ptr, sel, new_imp, types);
+    if !added.as_bool() {
+        // Selector already lives on this class. Replace that method only.
+        let _prev = method.set_implementation(new_imp);
+    }
+    eprintln!("[BAA] pet head can reach the top of the screen");
+}
+
+#[cfg(test)]
+mod top_reach_tests {
+    use super::{head_top_pad, relaxed_origin_y};
+
+    #[test]
+    fn scale_one_pad_is_half_the_gap_above_the_head() {
+        let pad = head_top_pad(324.0);
+        assert!((pad - 118.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn head_may_touch_the_physical_top_and_still_stops_at_the_dock() {
+        // 982-pt screen, menu bar leaves visible top at 944. Window is 324.
+        // AppKit origin.y max under the menu bar: 944 - 324 = 620.
+        let screen_top = 982.0;
+        let height = 324.0;
+        let dock_floor = 40.0;
+        let menu_ceiling = 620.0;
+
+        let at_top = relaxed_origin_y(900.0, menu_ceiling, height, screen_top);
+        let pad = head_top_pad(height);
+        assert!((at_top - (screen_top + pad - height)).abs() < 0.001);
+
+        let mid = relaxed_origin_y(400.0, dock_floor, height, screen_top);
+        assert!((mid - 400.0).abs() < 0.001);
+
+        let into_dock = relaxed_origin_y(10.0, dock_floor, height, screen_top);
+        assert!((into_dock - dock_floor).abs() < 0.001);
+    }
+
+    #[test]
+    fn zoom_keeps_the_same_padding_fraction() {
+        let h = 324.0 * 1.4;
+        let pad = head_top_pad(h);
+        assert!((pad / h - 118.5 / 324.0).abs() < 0.0001);
+    }
 }
 
 unsafe fn order_front(ns_window: *mut std::ffi::c_void) {

@@ -28,8 +28,6 @@ import {
 interface SettingsModalProps {
   open: boolean;
   initial: AppConfig | null;
-  muted?: boolean;
-  onToggleMute?: () => void;
   onClose: () => void;
   onSave: (cfg: AppConfig) => Promise<void>;
 }
@@ -60,8 +58,6 @@ function daysInMonth(month: number | null): number {
 export function SettingsModal({
   open,
   initial,
-  muted = false,
-  onToggleMute,
   onClose,
   onSave: _onSave,
 }: SettingsModalProps) {
@@ -192,23 +188,6 @@ export function SettingsModal({
           })}
         </div>
       </div>
-
-      {onToggleMute && (
-        <div className="baa-ios-card flex items-center justify-between gap-3 px-3.5 py-3">
-          <span className="text-[14px] text-[#1C1C1E] tracking-[-0.01em]">
-            Sounds
-          </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={!muted}
-            onClick={onToggleMute}
-            className={`baa-ios-toggle ${!muted ? "on" : "off"}`}
-          >
-            <span className="baa-ios-toggle-knob" />
-          </button>
-        </div>
-      )}
 
       {/* —— You (birthday + fav member) —— */}
       <div className="baa-ios-card px-3.5 py-3 space-y-2.5">

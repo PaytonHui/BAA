@@ -79,9 +79,9 @@ export const CAL_FORM_MULTI_LARGE_H = 800;
  */
 export const MENU_PANEL_W = 188;
 /** Function list content height — snug to items (no empty top/bottom) */
-export const MENU_PANEL_H = 360;
+export const MENU_PANEL_H = 400;
 /** With Support BAA expanded (QR + coffee button) */
-export const MENU_PANEL_H_SUPPORT = 560;
+export const MENU_PANEL_H_SUPPORT = 600;
 /**
  * Transparent padding around floating panels so drop-shadows aren’t clipped.
  * Used by menu + all other panel windows.

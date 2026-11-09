@@ -10,12 +10,10 @@ import {
   MacWindowShell,
   useMacWindowClose,
 } from "./components/MacWindowShell";
-import { isMuted, toggleMuted } from "./lib/sounds";
 import type { AppConfig } from "./types";
 
 export default function SettingsWindowApp() {
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [muted, setMuted] = useState(() => isMuted());
 
   useEffect(() => {
     invoke("pin_to_all_spaces_cmd").catch(() => undefined);
@@ -36,7 +34,6 @@ export default function SettingsWindowApp() {
       invoke<AppConfig>("get_config")
         .then(setConfig)
         .catch(() => undefined);
-      setMuted(isMuted());
     };
     void listen("settings-window-shown", refresh).then((u) => unsubs.push(u));
     void listen("settings-window-data", refresh).then((u) => unsubs.push(u));
@@ -53,12 +50,6 @@ export default function SettingsWindowApp() {
     await emit("settings-saved", { cfg }).catch(() => undefined);
   }, []);
 
-  const onToggleMute = useCallback(() => {
-    const next = toggleMuted();
-    setMuted(next);
-    void emit("mute-changed", { muted: next }).catch(() => undefined);
-  }, []);
-
   return (
     <MacWindowShell
       shownEvent="settings-window-shown"
@@ -67,8 +58,6 @@ export default function SettingsWindowApp() {
       <SettingsModal
         open
         initial={config}
-        muted={muted}
-        onToggleMute={onToggleMute}
         onClose={() => void close()}
         onSave={onSave}
       />

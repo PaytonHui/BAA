@@ -4,6 +4,7 @@ import { BUY_ME_A_COFFEE_QR, openBuyMeACoffee } from "../lib/donate";
 
 interface ContextMenuProps {
   muted: boolean;
+  dark: boolean;
   open?: boolean;
   /**
    * Floating panel window mode (no side strip / no pet shell).
@@ -17,6 +18,7 @@ interface ContextMenuProps {
   onCalendar: () => void;
   onLightColor: () => void;
   onToggleMute: () => void;
+  onToggleDark: () => void;
   onSettings: () => void;
   onSyncCalendar: () => void;
   onHide: () => void;
@@ -34,6 +36,7 @@ interface ContextMenuProps {
  */
 export function ContextMenu({
   muted,
+  dark,
   open = true,
   floating = false,
   menuSide = "right",
@@ -42,6 +45,7 @@ export function ContextMenu({
   onCalendar,
   onLightColor,
   onToggleMute,
+  onToggleDark,
   onSettings,
   onSyncCalendar,
   onHide,
@@ -75,7 +79,20 @@ export function ContextMenu({
       <MenuItem label="Calendar" onClick={onCalendar} />
       {showChat && <MenuItem label="Chat" onClick={onChat} />}
       <MenuItem label="Light color" onClick={onLightColor} />
-      <MuteSlideRow muted={muted} onToggle={onToggleMute} />
+      <SwitchRow
+        label="Sound"
+        on={!muted}
+        onToggle={onToggleMute}
+        onLabel="Sound on"
+        offLabel="Sound muted"
+      />
+      <SwitchRow
+        label="Dark mode"
+        on={dark}
+        onToggle={onToggleDark}
+        onLabel="Dark mode on"
+        offLabel="Dark mode off"
+      />
       <MenuItem label="Settings" onClick={onSettings} />
       <MenuItem
         label={supportOpen ? "Support BAA ▾" : "Support BAA ▸"}
@@ -194,14 +211,19 @@ function MenuItem({
   );
 }
 
-function MuteSlideRow({
-  muted,
+function SwitchRow({
+  label,
+  on,
   onToggle,
+  onLabel,
+  offLabel,
 }: {
-  muted: boolean;
+  label: string;
+  on: boolean;
   onToggle: () => void;
+  onLabel: string;
+  offLabel: string;
 }) {
-  const on = !muted;
   return (
     <div
       role="menuitemcheckbox"
@@ -214,13 +236,13 @@ function MuteSlideRow({
       onPointerDown={(e) => e.stopPropagation()}
     >
       <span className="text-[13px] text-[#1C1C1E] select-none tracking-[-0.01em]">
-        Sound
+        {label}
       </span>
       <button
         type="button"
         role="switch"
         aria-checked={on}
-        aria-label={on ? "Sound on" : "Sound muted"}
+        aria-label={on ? onLabel : offLabel}
         tabIndex={-1}
         className={`baa-ios-toggle pointer-events-none ${on ? "on" : "off"}`}
       >
