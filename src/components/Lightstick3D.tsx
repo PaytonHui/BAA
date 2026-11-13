@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useGLTF } from "@react-three/drei";
@@ -29,6 +30,12 @@ import type { WeatherSnapshot } from "../lib/weather";
 import { weatherIsHot } from "../lib/weather";
 import { WeatherFx } from "./WeatherFx";
 import {
+  CHROME_TAIL_CLUSTERS,
+  chromeOrbitPoint,
+  chromeTailSample,
+  chromeTailU,
+} from "../lib/chromeTail";
+import {
   HEAD_SCREEN_SCALE,
   PET_H,
   PET_HIT_H,
@@ -38,6 +45,274 @@ import {
 
 /** Head-only bunny from baa-lightstick-head-only.blend */
 const MODEL_URL = "/models/newjeans-lightstick/head.glb";
+
+/**
+ * Chrome stars orbit the head in 3D. Positive Z is toward the camera,
+ * so each star spends time in front of the pet and time behind it.
+ * Each star trails the same shine as a drag: white dots and a 4-point spark.
+ */
+const CHROME_ORBIT: {
+  phase: number;
+  speed: number;
+  reach: number;
+  depth: number;
+  y: number;
+  size: number;
+  tilt: number;
+  spin: number;
+  color: string;
+}[] = [
+  { phase: 0.2, speed: 0.9, reach: 1.22, depth: 0.9, y: 0.42, size: 0.2, tilt: -0.3, spin: 1.3, color: "#ff4eb5" },
+  { phase: 1.15, speed: 1.2, reach: 1.4, depth: 1.05, y: -0.18, size: 0.13, tilt: 0.4, spin: -1.1, color: "#3ad4ff" },
+  { phase: 2.05, speed: 0.72, reach: 1.12, depth: 0.75, y: 0.62, size: 0.16, tilt: 0.15, spin: 0.8, color: "#f4f7ff" },
+  { phase: 3.3, speed: 1.35, reach: 1.5, depth: 0.95, y: -0.4, size: 0.12, tilt: -0.5, spin: 1.6, color: "#c07bff" },
+  { phase: 4.25, speed: 0.98, reach: 1.28, depth: 1.12, y: 0.08, size: 0.17, tilt: 0.25, spin: -0.7, color: "#ffd0ea" },
+  { phase: 5.15, speed: 1.08, reach: 1.08, depth: 0.82, y: -0.55, size: 0.14, tilt: 0.1, spin: 1.15, color: "#d5e4ff" },
+  { phase: 5.9, speed: 0.64, reach: 1.55, depth: 1.0, y: 0.28, size: 0.1, tilt: -0.2, spin: -1.4, color: "#fff3c4" },
+  { phase: 0.75, speed: 1.28, reach: 1.32, depth: 0.7, y: -0.08, size: 0.15, tilt: 0.55, spin: 0.95, color: "#7af0ff" },
+];
+
+function makeChromeStarGeometry(): THREE.ExtrudeGeometry {
+  const shape = new THREE.Shape();
+  const points = 4;
+  const outer = 1;
+  const inner = 0.4;
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? outer : inner;
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r;
+    if (i === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  }
+  shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth: 0.28,
+    bevelEnabled: true,
+    bevelThickness: 0.08,
+    bevelSize: 0.05,
+    bevelSegments: 1,
+    curveSegments: 2,
+  });
+  geo.center();
+  return geo;
+}
+
+type ShineBit = {
+  dx: number;
+  dy: number;
+  s: number;
+  bright: number;
+  spark: boolean;
+};
+
+/** Same cluster as the drag trail: a few soft dots and one 4-point spark. */
+function makeShineCluster(seed: number): ShineBit[] {
+  let s = seed >>> 0;
+  const rand = () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+  const n = 3 + Math.floor(rand() * 3);
+  const dots: ShineBit[] = [];
+  for (let i = 0; i < n; i++) {
+    const ang = rand() * Math.PI * 2;
+    const spread = 1 + rand() * 7;
+    dots.push({
+      dx: Math.cos(ang) * spread,
+      dy: Math.sin(ang) * spread,
+      s: 1.1 + rand() * 2,
+      bright: 0.55 + rand() * 0.45,
+      spark: false,
+    });
+  }
+  dots.push({
+    dx: (rand() - 0.5) * 1.5,
+    dy: (rand() - 0.5) * 1.5,
+    s: 2.2 + rand() * 1.2,
+    bright: 1,
+    spark: true,
+  });
+  return dots;
+}
+
+const TAIL_SHINE: ShineBit[][] = Array.from(
+  { length: CHROME_ORBIT.length * CHROME_TAIL_CLUSTERS },
+  (_, i) => makeShineCluster(i + 1)
+);
+
+/** 3D chrome stars. The tail is the drag shine, laid behind each star. */
+function ChromeOrbit({
+  anchor,
+  model,
+  active,
+  tailLayerRef,
+}: {
+  anchor: RefObject<THREE.Group | null>;
+  model: THREE.Object3D;
+  active: boolean;
+  tailLayerRef: RefObject<HTMLDivElement | null>;
+}) {
+  const rig = useRef<THREE.Group>(null);
+  const blend = useRef(0);
+  const measured = useRef(false);
+  const radius = useRef(0.4);
+  const offset = useRef(new THREE.Vector3());
+  const world = useRef(new THREE.Vector3());
+  const view = useRef(new THREE.Vector3());
+  const ndc = useRef(new THREE.Vector3());
+  const tailEls = useRef<HTMLDivElement[]>([]);
+  const geo = useMemo(() => makeChromeStarGeometry(), []);
+  const mats = useMemo(
+    () =>
+      CHROME_ORBIT.map(
+        (star) =>
+          new THREE.MeshPhysicalMaterial({
+            color: star.color,
+            metalness: 0.78,
+            roughness: 0.14,
+            clearcoat: 1,
+            clearcoatRoughness: 0.05,
+            sheen: 0.55,
+            sheenColor: new THREE.Color("#ffffff"),
+            sheenRoughness: 0.25,
+            emissive: new THREE.Color(star.color),
+            emissiveIntensity: 0.45,
+          })
+      ),
+    []
+  );
+  useEffect(
+    () => () => {
+      geo.dispose();
+      mats.forEach((mat) => mat.dispose());
+    },
+    [geo, mats]
+  );
+
+  useFrame((state, delta) => {
+    const g = rig.current;
+    const host = anchor.current;
+    const tailLayer = tailLayerRef.current;
+    if (!g || !host) return;
+
+    if (!measured.current) {
+      const box = new THREE.Box3().setFromObject(model);
+      if (box.isEmpty()) return;
+      const size = box.getSize(new THREE.Vector3());
+      const parent = g.parent;
+      const worldScale = new THREE.Vector3(1, 1, 1);
+      parent?.getWorldScale(worldScale);
+      const sx = Math.max(0.001, Math.abs(worldScale.x));
+      const sy = Math.max(0.001, Math.abs(worldScale.y));
+      radius.current = Math.max(size.x / sx, size.y / sy) * 0.56;
+      const center = box.getCenter(new THREE.Vector3());
+      parent?.worldToLocal(center);
+      offset.current.set(center.x - host.position.x, center.y - host.position.y, center.z - host.position.z);
+      measured.current = radius.current > 0.01;
+    }
+
+    blend.current = THREE.MathUtils.damp(blend.current, active ? 1 : 0, 5, delta);
+    const show = blend.current > 0.03;
+    g.visible = show;
+    if (tailLayer) tailLayer.style.visibility = show ? "visible" : "hidden";
+    if (!show) return;
+
+    g.position.set(
+      host.position.x + offset.current.x,
+      host.position.y + offset.current.y,
+      host.position.z + offset.current.z
+    );
+    g.updateWorldMatrix(true, false);
+
+    const t = state.clock.elapsedTime;
+    const reach = radius.current;
+    for (let i = 0; i < CHROME_ORBIT.length; i++) {
+      const star = CHROME_ORBIT[i];
+      const mesh = g.children[i] as THREE.Mesh | undefined;
+      const mat = mats[i];
+      if (!mesh) continue;
+      const ang = t * star.speed + star.phase;
+      const r = reach * star.reach;
+      const bobAmp = reach * 0.06;
+      const y = reach * star.y;
+      const p = chromeOrbitPoint(ang, r, star.depth, y, bobAmp, star.phase, t);
+      mesh.position.set(p.x, p.y, p.z);
+      mesh.lookAt(state.camera.position);
+      mesh.rotateZ(star.tilt + Math.sin(t * star.spin + star.phase) * 0.4);
+      const shine = 0.72 + 0.28 * Math.sin(t * 3.1 + star.phase);
+      const s = reach * star.size * shine * blend.current;
+      mesh.scale.setScalar(Math.max(0.001, s));
+      mat.emissiveIntensity = 0.35 + shine * 0.7;
+    }
+
+    if (!tailLayer) return;
+    const need = CHROME_ORBIT.length * CHROME_TAIL_CLUSTERS;
+    if (tailEls.current.length !== need || !tailEls.current[0]?.isConnected) {
+      tailEls.current = Array.from(
+        tailLayer.querySelectorAll<HTMLDivElement>("[data-tail]")
+      );
+    }
+    const els = tailEls.current;
+    if (els.length !== need) return;
+
+    world.current.set(0, 0, 0);
+    g.localToWorld(world.current);
+    view.current.copy(world.current).applyMatrix4(state.camera.matrixWorldInverse);
+    const baseDist = Math.max(0.2, -view.current.z);
+    const halfW = state.size.width * 0.5;
+    const halfH = state.size.height * 0.5;
+
+    for (let i = 0; i < CHROME_ORBIT.length; i++) {
+      const star = CHROME_ORBIT[i];
+      const ang = t * star.speed + star.phase;
+      const r = reach * star.reach;
+      const bobAmp = reach * 0.06;
+      const y = reach * star.y;
+      const shine = 0.72 + 0.28 * Math.sin(t * 3.1 + star.phase);
+      const starRadius = Math.max(0.001, reach * star.size * shine);
+      const spec = {
+        ang,
+        speed: star.speed,
+        r,
+        depth: star.depth,
+        y,
+        bobAmp,
+        bobPhase: star.phase,
+        t,
+        insetRad: (starRadius * 0.9) / Math.max(r, 1e-4),
+      };
+      for (let c = 0; c < CHROME_TAIL_CLUSTERS; c++) {
+        const el = els[i * CHROME_TAIL_CLUSTERS + c];
+        if (!el) continue;
+        const u = chromeTailU(c, CHROME_TAIL_CLUSTERS);
+        const sample = chromeTailSample(spec, u);
+        world.current.set(sample.x, sample.y, sample.z);
+        g.localToWorld(world.current);
+        view.current.copy(world.current).applyMatrix4(state.camera.matrixWorldInverse);
+        const dist = Math.max(0.05, -view.current.z);
+        ndc.current.copy(world.current).project(state.camera);
+        if (ndc.current.z > 1) {
+          el.style.opacity = "0";
+          continue;
+        }
+        const depthScale = THREE.MathUtils.clamp(baseDist / dist, 0.45, 1.45);
+        const sc = depthScale * (0.62 + 0.38 * sample.fade);
+        const tw = 0.78 + 0.22 * Math.sin(t * 7.5 + star.phase * 3 + c);
+        el.style.opacity = String(Math.min(1, sample.fade * blend.current * tw));
+        el.style.transform = `translate(${ndc.current.x * halfW}px, ${-ndc.current.y * halfH}px) scale(${sc})`;
+      }
+    }
+  });
+
+  return (
+    <group ref={rig} visible={false}>
+      {CHROME_ORBIT.map((star, i) => (
+        <mesh key={star.phase} geometry={geo} material={mats[i]} />
+      ))}
+    </group>
+  );
+}
 
 /** A percent across the centered head, so bursts rise off the face. */
 function headFxLeft(): number {
@@ -222,7 +497,7 @@ export function Lightstick3D({
   const fxId = useRef(0);
 
   /** Mini star-cluster particles (CSS dots) — always behind the 3D pet */
-  type StarDot = { dx: number; dy: number; s: number; bright: number };
+  type StarDot = { dx: number; dy: number; s: number; bright: number; spark?: boolean };
   type StarCluster = {
     id: number;
     x: number; // px from pet center
@@ -232,6 +507,7 @@ export function Lightstick3D({
   };
   const [clusters, setClusters] = useState<StarCluster[]>([]);
   const clusterId = useRef(0);
+  const tailLayerRef = useRef<HTMLDivElement>(null);
   const lastStarT = useRef(0);
 
   // Star-cluster motion trail — spawned BEHIND drag, never on the body
@@ -239,7 +515,7 @@ export function Lightstick3D({
     if (!dragMotion.dragging || dragMotion.speed < 80) return;
 
     const now = performance.now();
-    const interval = Math.max(36, 80 - dragMotion.speed * 0.035);
+    const interval = Math.max(18, 44 - dragMotion.speed * 0.028);
     if (now - lastStarT.current < interval) return;
     lastStarT.current = now;
 
@@ -247,48 +523,48 @@ export function Lightstick3D({
     const ux = -dragMotion.vx / sp; // unit vector behind motion
     const uy = -dragMotion.vy / sp;
 
-    // Spawn near the body so trail feels like it comes from the stick
-    const nClusters = dragMotion.speed > 450 ? 2 : 1;
+    // Fuller trail, but tight on the head. A long drag must not
+    // throw sparks out toward the cursor.
+    const nClusters = dragMotion.speed > 450 ? 6 : 4;
     const batch: StarCluster[] = [];
 
     for (let c = 0; c < nClusters; c++) {
-      // Close to entity: rim of the head/body, slightly behind drag
-      // ~14–32px from center (was 52–90+)
-      const dist = 14 + Math.random() * 18 + Math.min(10, dragMotion.speed * 0.012);
-      const side = (Math.random() - 0.5) * 16; // tight scatter around body
+      const dist = 10 + Math.random() * 12;
+      const side = (Math.random() - 0.5) * 8;
       const px = ux * dist - uy * side;
       const py = uy * dist + ux * side;
 
-      // Compact cluster (still reads as a group, not one big star on face)
-      const nDots = 3 + Math.floor(Math.random() * 3);
+      const nDots = 6 + Math.floor(Math.random() * 4);
       const dots: StarDot[] = Array.from({ length: nDots }, () => {
         const ang = Math.random() * Math.PI * 2;
-        const r = 1 + Math.random() * 7;
+        const r = Math.random() * 4;
         return {
           dx: Math.cos(ang) * r,
           dy: Math.sin(ang) * r,
-          s: 1.1 + Math.random() * 2.0,
+          s: 1.6 + Math.random() * 2.6,
           bright: 0.55 + Math.random() * 0.45,
         };
       });
-      // Core spark
-      dots.push({
-        dx: (Math.random() - 0.5) * 1.5,
-        dy: (Math.random() - 0.5) * 1.5,
-        s: 2.2 + Math.random() * 1.2,
-        bright: 1,
-      });
+      for (let s = 0; s < 2; s++) {
+        dots.push({
+          dx: (Math.random() - 0.5) * 2,
+          dy: (Math.random() - 0.5) * 2,
+          s: 3.2 + Math.random() * 2.2,
+          bright: 1,
+          spark: true,
+        });
+      }
 
       batch.push({
         id: ++clusterId.current,
         x: px,
         y: py,
-        duration: 0.4 + Math.random() * 0.28,
+        duration: 0.5 + Math.random() * 0.35,
         dots,
       });
     }
 
-    setClusters((prev) => [...prev, ...batch].slice(-18));
+    setClusters((prev) => [...prev, ...batch].slice(-48));
     const clear = window.setTimeout(() => {
       setClusters((prev) =>
         prev.filter((s) => !batch.some((b) => b.id === s.id))
@@ -421,6 +697,28 @@ export function Lightstick3D({
         className="absolute inset-0 z-0 pointer-events-none overflow-visible"
         aria-hidden
       >
+        <div ref={tailLayerRef} className="star-tail-layer absolute inset-0">
+          {TAIL_SHINE.map((dots, index) => (
+            <div
+              key={index}
+              data-tail={index}
+              className="star-cluster absolute left-1/2 top-1/2"
+            >
+              {dots.map((d, i) => (
+                <span
+                  key={i}
+                  className={d.spark ? "star-spark" : "star-dot"}
+                  style={{
+                    transform: `translate(${d.dx}px, ${d.dy}px)`,
+                    width: d.s,
+                    height: d.s,
+                    opacity: d.bright,
+                  }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
         {clusters.map((cl) => (
           <div
             key={cl.id}
@@ -434,7 +732,7 @@ export function Lightstick3D({
             {cl.dots.map((d, i) => (
               <span
                 key={i}
-                className={i === cl.dots.length - 1 ? "star-spark" : "star-dot"}
+                className={d.spark ? "star-spark" : "star-dot"}
                 style={{
                   transform: `translate(${d.dx}px, ${d.dy}px)`,
                   width: d.s,
@@ -575,6 +873,7 @@ export function Lightstick3D({
               onFaceYaw={onFaceYaw}
               onBodyReady={onBodyReady}
               freeLook={motionQuiet ? null : freeLook}
+              tailLayerRef={tailLayerRef}
             />
           </Suspense>
         </group>
@@ -828,6 +1127,7 @@ function ExactLightstick({
   onFaceYaw,
   onBodyReady,
   freeLook = null,
+  tailLayerRef,
 }: {
   lifeState: PetLifeState;
   expression: PetExpression;
@@ -853,6 +1153,7 @@ function ExactLightstick({
   /** False while a turn or gesture is still playing. Weather waits for true. */
   onBodyReady?: (ready: boolean) => void;
   freeLook?: { active: boolean; yaw: number; pitch: number } | null;
+  tailLayerRef: RefObject<HTMLDivElement | null>;
 }) {
   void _lifeState;
   const onFaceYawRef = useRef(onFaceYaw);
@@ -1629,13 +1930,16 @@ function ExactLightstick({
       }
     }
 
-    // —— Look-at cursor (subtle) ——
-    const targetLookX = pointerNorm
-      ? THREE.MathUtils.clamp(-pointerNorm.y * 0.12, -0.12, 0.12)
-      : 0;
-    const targetLookZ = pointerNorm
-      ? THREE.MathUtils.clamp(pointerNorm.x * 0.14, -0.14, 0.14)
-      : 0;
+    // Hold plays the spin on the pet's own axis. The head does not lean
+    // toward the cursor, so a resting pointer does not steer the pose.
+    const targetLookX =
+      pointerNorm && !hovering && !selfSpin
+        ? THREE.MathUtils.clamp(-pointerNorm.y * 0.12, -0.12, 0.12)
+        : 0;
+    const targetLookZ =
+      pointerNorm && !hovering && !selfSpin
+        ? THREE.MathUtils.clamp(pointerNorm.x * 0.14, -0.14, 0.14)
+        : 0;
     look.current.x = THREE.MathUtils.lerp(look.current.x, targetLookX, 0.08);
     look.current.z = THREE.MathUtils.lerp(look.current.z, targetLookZ, 0.08);
 
@@ -2134,6 +2438,7 @@ function ExactLightstick({
   });
 
   return (
+    <>
     <group ref={root}>
       <group ref={modelGroup}>
         <primitive object={model} />
@@ -2175,6 +2480,13 @@ function ExactLightstick({
         color={CYCLE_COLORS[0]}
       />
     </group>
+    <ChromeOrbit
+      anchor={root}
+      model={model}
+      active={selfSpin && !motionQuiet}
+      tailLayerRef={tailLayerRef}
+    />
+    </>
   );
 }
 

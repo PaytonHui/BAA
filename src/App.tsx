@@ -372,6 +372,19 @@ export default function App() {
     lastX: 0,
     lastY: 0,
   });
+  /** Cursor grab in physical pixels so a long drag cannot fall behind the pointer. */
+  const dragFollowRef = useRef({
+    factor: 1,
+    grabX: 0,
+    grabY: 0,
+    ready: false,
+    lastX: 0,
+    lastY: 0,
+    pendingX: 0,
+    pendingY: 0,
+    hasPending: false,
+    flying: false,
+  });
 
   /** Birthday motion end time — weather waits for this when it's a member day */
   const birthdayPlayingUntilRef = useRef(0);
@@ -2171,7 +2184,7 @@ export default function App() {
   }, []);
 
   const onPointerEnter = (e: React.PointerEvent) => {
-    // Rest cursor on stick ≥ 3.5s (no click) → orbit (pet-only mode)
+    // Rest cursor on the pet ≥ 3.5s (no click) → spin in place
     orbit.onPointerEnter(
       e,
       shellRef.current === "compact" && !chatOpenRef.current
@@ -2179,7 +2192,7 @@ export default function App() {
   };
 
   const onPointerLeave = () => {
-    // Only cancels the 3.5s arming; active orbit continues (stick leaves cursor on purpose)
+    // Cursor left. A spin already going keeps turning until the next click.
     orbit.onPointerLeave();
     setPointerNorm(null);
   };
@@ -2358,11 +2371,62 @@ export default function App() {
       lastX: e.screenX,
       lastY: e.screenY,
     };
+    const follow = dragFollowRef.current;
+    follow.ready = false;
+    follow.hasPending = false;
+    const downX = e.screenX;
+    const downY = e.screenY;
+    void (async () => {
+      try {
+        const win = getCurrentWindow();
+        const factor = await win.scaleFactor();
+        const pos = await win.outerPosition();
+        if (!dragRef.current?.dragging) return;
+        follow.factor = factor;
+        follow.grabX = downX * factor - pos.x;
+        follow.grabY = downY * factor - pos.y;
+        follow.lastX = pos.x;
+        follow.lastY = pos.y;
+        follow.ready = true;
+        if (follow.hasPending) void pumpDrag();
+      } catch (err) {
+        console.error("drag grab failed", err);
+      }
+    })();
     setDragMotion({ vx: 0, vy: 0, speed: 0, dragging: true });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
 
-  const onPointerMove = async (e: React.PointerEvent) => {
+  const pumpDrag = async () => {
+    const follow = dragFollowRef.current;
+    if (follow.flying) return;
+    follow.flying = true;
+    try {
+      const win = getCurrentWindow();
+      while (follow.hasPending && dragRef.current?.dragging) {
+        const sx = follow.pendingX;
+        const sy = follow.pendingY;
+        follow.hasPending = false;
+        const x = Math.round(sx * follow.factor - follow.grabX);
+        const y = Math.round(sy * follow.factor - follow.grabY);
+        const dx = x - follow.lastX;
+        const dy = y - follow.lastY;
+        if (!dx && !dy) continue;
+        follow.lastX = x;
+        follow.lastY = y;
+        await win.setPosition(new PhysicalPosition(x, y));
+        const kinds = openPanelKinds();
+        if (kinds.length) await nudgeOpenPanelWindows(kinds, dx, dy);
+      }
+    } catch (err) {
+      console.error("drag move failed", err);
+    } finally {
+      follow.flying = false;
+      if (follow.hasPending && dragRef.current?.dragging) void pumpDrag();
+    }
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
     orbit.onPointerMove(e);
 
     // Look-at: map pointer into pet local -1..1
@@ -2411,23 +2475,13 @@ export default function App() {
       dragging: true,
     });
 
-    try {
-      const win = getCurrentWindow();
-      const factor = await win.scaleFactor();
-      const pos = await win.outerPosition();
-      const dxPhys = Math.round(dx * factor);
-      const dyPhys = Math.round(dy * factor);
-      await win.setPosition(
-        new PhysicalPosition(Math.round(pos.x + dxPhys), Math.round(pos.y + dyPhys))
-      );
-      // Drag overlays with the pet (chat / calendar / etc.)
-      const kinds = openPanelKinds();
-      if (kinds.length) {
-        void nudgeOpenPanelWindows(kinds, dxPhys, dyPhys);
-      }
-    } catch (err) {
-      console.error("drag move failed", err);
-    }
+    // Place the window from the grab point. Queued moves keep the latest
+    // cursor position, so a long drag does not leave the pet behind.
+    const follow = dragFollowRef.current;
+    follow.pendingX = e.screenX;
+    follow.pendingY = e.screenY;
+    follow.hasPending = true;
+    if (follow.ready) void pumpDrag();
   };
 
   const onPointerUp = async (e: React.PointerEvent) => {
@@ -2435,6 +2489,8 @@ export default function App() {
     if (!d) return;
     const wasDrag = d.moved;
     dragRef.current = null;
+    dragFollowRef.current.hasPending = false;
+    dragFollowRef.current.ready = false;
     dragVelRef.current.vx = 0;
     dragVelRef.current.vy = 0;
     setDragMotion({ vx: 0, vy: 0, speed: 0, dragging: false });

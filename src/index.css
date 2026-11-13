@@ -531,6 +531,18 @@ textarea {
   will-change: opacity, filter;
 }
 
+/* Chrome-star tail. Same dots as the drag shine, held on the orbit. */
+.star-tail-layer {
+  visibility: hidden;
+}
+
+.star-cluster {
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+
 /* Tiny cluster dots */
 .star-dot {
   position: absolute;
