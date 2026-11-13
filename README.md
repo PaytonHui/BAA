@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src-tauri/icons/icon.png" width="180" alt="BAA app icon" />
+</p>
+
 # BAA
 
 **BAA** is a macOS desktop companion shaped like a NewJeans lightstick (**Binky**).  
@@ -7,8 +11,8 @@ It floats on your desktop with chat, calendar, care reminders, and lightstick LE
 
 ## Download (friends — no coding)
 
-1. Open **[Releases](https://github.com/PaytonHui/BAA/releases)**
-2. Download **`BAA_0.2.15_aarch64.dmg`** (Apple Silicon Macs: M1 / M2 / M3 / M4)
+1. Open **[Releases](https://github.com/PaytonHui/BAA/releases/tag/v1.0.0)**
+2. Download **`BAA_1.0.0_aarch64.dmg`** (Apple Silicon Macs: M1 / M2 / M3 / M4)
 3. Open the DMG → drag **BAA** to Applications (or open it from the disk image)
 4. First open: if macOS blocks it → **right‑click BAA → Open** → **Open** again  
    (or **System Settings → Privacy & Security → Open Anyway**)
@@ -49,7 +53,7 @@ Release build:
 ```bash
 npm run tauri:build
 # → src-tauri/target/release/bundle/macos/BAA.app
-# → src-tauri/target/release/bundle/dmg/BAA_0.2.15_aarch64.dmg
+# → src-tauri/target/release/bundle/dmg/BAA_1.0.0_aarch64.dmg
 ```
 
 ---
